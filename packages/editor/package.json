@@ -1,0 +1,22 @@
+{
+  "name": "tommy-omp-editor",
+  "version": "0.1.0",
+  "description": "Home/End navigation and undo/redo for the OMP prompt editor",
+  "type": "module",
+  "license": "UNLICENSED",
+  "files": ["src", "README.md"],
+  "omp": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "test": "bun test test"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "^18.10.4",
+    "@oh-my-pi/pi-tui": "^18.10.4"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.10.4",
+    "@oh-my-pi/pi-tui": "18.10.4"
+  }
+}

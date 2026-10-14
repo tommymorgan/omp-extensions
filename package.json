@@ -1,0 +1,9 @@
+{
+  "name": "tommy-omp-extensions",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test packages/editor/test",
+    "test:editor": "bun test packages/editor/test"
+  }
+}
