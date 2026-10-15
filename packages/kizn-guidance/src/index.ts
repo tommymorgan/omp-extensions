@@ -173,6 +173,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     return receiver.notify(event.server, event.method, event.params);
   });
   pi.on("context", event => {
+    if (!manager?.getConnection("kizn")) stale = true;
     const last = event.messages.findLastIndex(message => {
       const guidance = GuidanceMessage.safeParse(message);
       return guidance.success && guidance.data.details.sessionId === context?.sessionManager.getSessionId()
