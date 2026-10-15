@@ -9,6 +9,7 @@ export type ReceiverHost = {
   connection: () => Connection | undefined;
   deliver: (binding: Binding, snapshot: Snapshot) => void;
   confirm: (binding: Binding) => void;
+  invalidate: (binding: Binding) => void;
   report: (message: string) => void;
 };
 
@@ -30,6 +31,7 @@ export function createReceiver(host: ReceiverHost) {
     dirty: boolean;
     reading: boolean;
     ready: boolean;
+    subscribed: boolean;
     revision: number;
     version: string;
     confirmation: ReturnType<typeof createConfirmation>;
@@ -85,7 +87,7 @@ export function createReceiver(host: ReceiverHost) {
     const state = {
       binding, connection, abort: new AbortController(),
       uri: `kizn://instructions/${encodeURIComponent(binding.handle)}`,
-      dirty: true, reading: false, ready: false, revision: 0, version: binding.version,
+      dirty: true, reading: false, ready: false, subscribed: false, revision: 0, version: binding.version,
       confirmation: createConfirmation(),
     };
     active = state;
@@ -97,6 +99,7 @@ export function createReceiver(host: ReceiverHost) {
         if (active !== state) return;
         await connection.request("resources/subscribe", { uri: state.uri }, state.abort.signal);
         if (active !== state) return;
+        state.subscribed = true;
         // Native listener startup is best-effort. Kizn's initial invalidation proves end-to-end delivery.
         const confirmed = createConfirmation();
         const timer = setTimeout(() => confirmed.reject(new Error("Kizn notification delivery was not established")), 10_000);
@@ -142,6 +145,8 @@ export function createReceiver(host: ReceiverHost) {
       const update = z.object({ uri: z.string() }).safeParse(params);
       if (!update.success || update.data.uri !== active.uri) return Promise.resolve();
       active.confirmation.resolve();
+      active.ready = active.subscribed;
+      host.invalidate(active.binding);
       active.dirty = true;
       return refresh(active);
     },

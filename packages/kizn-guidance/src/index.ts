@@ -29,8 +29,12 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     else console.error(failureNotice);
   }
 
+  function owns(owner: Binding): boolean {
+    return scopeCwd === context?.cwd && owner.sessionId === context?.sessionManager.getSessionId() && owner.handle === binding?.handle;
+  }
+
   function deliver(owner: Binding, snapshot: Snapshot): void {
-    if (scopeCwd !== context?.cwd || owner.sessionId !== context?.sessionManager.getSessionId() || owner.handle !== binding?.handle) return;
+    if (!owns(owner)) return;
     latest = snapshot;
     const message = instructionMessage(owner, snapshot);
     pi.sendMessage({ ...message, details: { ...message.details, scope } }, { deliverAs: "aside" });
@@ -62,7 +66,10 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     },
     deliver,
     confirm(owner) {
-      if (scopeCwd === context?.cwd && owner.sessionId === context?.sessionManager.getSessionId() && owner.handle === binding?.handle) stale = false;
+      if (owns(owner)) stale = false;
+    },
+    invalidate(owner) {
+      if (owns(owner)) stale = true;
     },
     report,
   });
@@ -194,7 +201,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     }
     if (stale && context) messages.push({
       role: "custom", customType: "kizn-guidance-status", display: false, timestamp: Date.now(),
-      content: JSON.stringify({ kiznInstructions: latest ? "stale" : "unavailable", message: failureNotice }),
+      content: JSON.stringify({ kiznInstructions: latest ? "stale" : "unavailable", message: "Kizn instructions are not current; refresh or reconnect before writing." }),
       details: { scope },
     });
     return { messages };
