@@ -11,6 +11,7 @@ const GuidanceMessage = z.object({
 
 export default function kiznGuidance(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
+  let scopeCwd: string | undefined;
   let binding: Binding | undefined;
   let latest: Snapshot | undefined;
   let stale = true;
@@ -29,7 +30,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
   }
 
   function deliver(owner: Binding, snapshot: Snapshot): void {
-    if (owner.sessionId !== context?.sessionManager.getSessionId() || owner.handle !== binding?.handle) return;
+    if (scopeCwd !== context?.cwd || owner.sessionId !== context?.sessionManager.getSessionId() || owner.handle !== binding?.handle) return;
     latest = snapshot;
     const message = instructionMessage(owner, snapshot);
     pi.sendMessage({ ...message, details: { ...message.details, scope } }, { deliverAs: "aside" });
@@ -61,7 +62,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     },
     deliver,
     confirm(owner) {
-      if (owner.sessionId === context?.sessionManager.getSessionId() && owner.handle === binding?.handle) stale = false;
+      if (scopeCwd === context?.cwd && owner.sessionId === context?.sessionManager.getSessionId() && owner.handle === binding?.handle) stale = false;
     },
     report,
   });
@@ -73,10 +74,11 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     if (!ctx || !native || (binding && !renew)) return Promise.resolve();
     const generation = scope;
     const sessionId = ctx.sessionManager.getSessionId();
+    const cwd = ctx.cwd;
     const signal = controller.signal;
     const operation = (async () => {
       try {
-        const remote = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { signal, timeout: 10000 });
+        const remote = await pi.exec("git", ["-C", cwd, "remote", "-v"], { signal, timeout: 10000 });
         // Outside a repository there is no repository scope. Other Git errors must not silently broaden access.
         if (remote.code !== 0 && !remote.stderr.includes("not a git repository")) throw new Error("Cannot determine Kizn repository scope");
         const urls = remote.code === 0 ? [...new Set(remote.stdout.split("\n").flatMap(line => {
@@ -88,7 +90,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
           name: "start_session", arguments: { remoteUrls: urls },
         }, { signal });
         if (generation !== scope || signal.aborted || manager?.getConnection("kizn") !== native
-          || ctx.sessionManager.getSessionId() !== sessionId) return;
+          || ctx.cwd !== cwd || ctx.sessionManager.getSessionId() !== sessionId) return;
         const started = readStartedSession(result);
         const previousVersion = latest?.instructionsVersion;
         binding = { sessionId, handle: started.handle, version: started.instructionsVersion };
@@ -133,6 +135,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     controller.abort();
     controller = new AbortController();
     scope = crypto.randomUUID();
+    scopeCwd = ctx.cwd;
     const generation = scope;
     binding = undefined;
     latest = undefined;
@@ -153,6 +156,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     controller.abort();
     scope = crypto.randomUUID();
     context = undefined;
+    scopeCwd = undefined;
     binding = undefined;
     latest = undefined;
     starting = undefined;
@@ -162,7 +166,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     await receiver.stop();
   });
   pi.on("before_agent_start", async (_event, ctx) => {
-    if (context?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) await activate(ctx);
+    if (scopeCwd !== ctx.cwd || context?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) await activate(ctx);
     else { attach(ctx); await bootstrap(); }
     if (!binding || !latest) return;
     const message = instructionMessage(binding, latest);
@@ -172,7 +176,8 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     if (binding?.sessionId !== ctx.sessionManager.getSessionId()) return;
     return receiver.notify(event.server, event.method, event.params);
   });
-  pi.on("context", event => {
+  pi.on("context", async (event, ctx) => {
+    if (context && scopeCwd !== ctx.cwd) await activate(ctx);
     if (!manager?.getConnection("kizn")) stale = true;
     const last = event.messages.findLastIndex(message => {
       const guidance = GuidanceMessage.safeParse(message);
