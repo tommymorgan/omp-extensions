@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test packages/editor/test",
-    "test:editor": "bun test packages/editor/test"
+    "test": "bun test packages/editor/test packages/kizn-guidance/test",
+    "test:editor": "bun test packages/editor/test",
+    "test:kizn-guidance": "bun test packages/kizn-guidance/test"
   }
 }
