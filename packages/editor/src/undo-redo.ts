@@ -48,7 +48,7 @@ export class UndoRedoEditor extends CustomEditor {
   private readonly redoStack: Snapshot[] = [];
   private activeGroup: EditGroup | undefined;
 
-  override handleInput(data: string): void {
+  override handleInput(data: string, preserveCursor = false): void {
     if (matchesCtrlShiftKey(data, 'z')) {
       this.undo();
       return;
@@ -59,7 +59,23 @@ export class UndoRedoEditor extends CustomEditor {
     }
 
     const before = this.snapshot();
-    super.handleInput(data);
+    const printableText =
+      preserveCursor && before.cursor.line === 0 && before.cursor.col === 0
+        ? extractPrintableText(data)
+        : undefined;
+    if (printableText !== undefined && printableText.length > 0 && !printableText.includes('\n')) {
+      // History's first-edit policy otherwise moves a caret at (0, 0) to the
+      // end. A native edit honors the position explicitly selected by Home.
+      this.applyHostEdit({
+        from: 0,
+        to: 0,
+        text: printableText,
+        cursor: printableText.length,
+        len: this.getText().length,
+      });
+    } else {
+      super.handleInput(data);
+    }
     const after = this.snapshot();
 
     if (before.text === after.text) {

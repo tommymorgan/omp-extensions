@@ -14,7 +14,7 @@ function editorWith(text: string): HomeEndEditor {
   return editor;
 }
 
-describe('single-line Home/End insertion', () => {
+describe('Home/End insertion', () => {
   it('End appends after the final character when starting inside a word', () => {
     const editor = editorWith('last word');
     editor.handleInput(LEFT);
@@ -42,6 +42,122 @@ describe('single-line Home/End insertion', () => {
     editor.handleInput(END);
     editor.handleInput('!');
     expect(editor.getText()).toBe('Xcurrent draft!');
+  });
+
+  it('Home preserves the prompt recalled with Up and inserts at its beginning', () => {
+    const editor = editorWith('');
+    editor.addToHistory('older prompt');
+    editor.addToHistory('latest prompt');
+    editor.handleInput('\x1b[A');
+    expect(editor.getText()).toBe('latest prompt');
+    editor.handleInput(HOME);
+    expect(editor.getText()).toBe('latest prompt');
+    expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+    editor.handleInput('>');
+    expect(editor.getText()).toBe('>latest prompt');
+    editor.handleInput('x');
+    editor.handleInput('\x1b[122;6u');
+    expect(editor.getText()).toBe('latest prompt');
+    editor.handleInput('\x1b[121;6u');
+    expect(editor.getText()).toBe('>xlatest prompt');
+  });
+
+  it('Home and End preserve the history position for subsequent Up and Down', () => {
+    const editor = editorWith('');
+    editor.addToHistory('older prompt');
+    editor.addToHistory('latest prompt');
+    editor.handleInput('\x1b[A');
+    editor.handleInput(HOME);
+    editor.handleInput('\x1b[A');
+    expect(editor.getText()).toBe('older prompt');
+    editor.handleInput(END);
+    expect(editor.getText()).toBe('older prompt');
+    expect(editor.getCursor()).toEqual({ line: 0, col: 12 });
+    editor.handleInput('\x1b[B');
+    expect(editor.getText()).toBe('latest prompt');
+  });
+
+  it('Home and End stay on the displayed row of a recalled wrapped prompt', () => {
+    const text = 'abcdefghijklmnopqrstuvwxyz0123456789\nsecond line';
+    const editor = editorWith('');
+    editor.setBorderVisible(false);
+    editor.setPaddingX(0);
+    editor.render(12);
+    editor.addToHistory(text);
+    editor.handleInput('\x1b[A');
+    for (let index = 0; index < 18; index++) editor.handleInput(RIGHT);
+    editor.render(12);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 18 });
+    const changes: string[] = [];
+    editor.onChange = value => changes.push(value);
+    editor.handleInput(HOME);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 12 });
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 23 });
+    expect(editor.getText()).toBe(text);
+    expect(changes).toEqual([]);
+    editor.handleInput('>');
+    expect(editor.getText()).toBe(`${text.slice(0, 23)}>${text.slice(23)}`);
+  });
+
+  it('End does not split a multi-code-unit grapheme at a full displayed-row boundary', () => {
+    const editor = editorWith('abcdefghij👩‍💻klmnop');
+    editor.setBorderVisible(false);
+    editor.setPaddingX(0);
+    editor.render(12);
+    editor.moveToMessageStart();
+    for (let index = 0; index < 3; index++) editor.handleInput(RIGHT);
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 10 });
+    editor.handleInput('!');
+    expect(editor.getText()).toBe('abcdefghij!👩‍💻klmnop');
+  });
+
+  it('End stays on a word-wrapped row even when wrapping leaves unused terminal cells', () => {
+    const editor = editorWith('one two three');
+    editor.setBorderVisible(false);
+    editor.setPaddingX(0);
+    editor.render(10);
+    editor.moveToMessageStart();
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 7 });
+    editor.handleInput('!');
+    expect(editor.getText()).toBe('one two! three');
+  });
+
+  it('Home and End follow resized row boundaries when only the cursor row is visible', () => {
+    const text = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const editor = editorWith(text);
+    editor.setBorderVisible(false);
+    editor.setPaddingX(0);
+    editor.setMaxHeight(1);
+    editor.render(12);
+    editor.handleInput(HOME);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 24 });
+    editor.render(10);
+    editor.handleInput(HOME);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 20 });
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 0, col: 29 });
+    editor.handleInput('!');
+    expect(editor.getText()).toBe(`${text.slice(0, 29)}!${text.slice(29)}`);
+  });
+
+  it('Home and End keep explicit newline boundaries and permit editing an empty middle line', () => {
+    const editor = editorWith('first\n\nmiddle line\nlast');
+    editor.handleInput('\x1b[A');
+    editor.handleInput(HOME);
+    expect(editor.getCursor()).toEqual({ line: 2, col: 0 });
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 2, col: 11 });
+    editor.handleInput('!');
+    expect(editor.getText()).toBe('first\n\nmiddle line!\nlast');
+    editor.handleInput('\x1b[A');
+    editor.handleInput(HOME);
+    editor.handleInput(END);
+    expect(editor.getCursor()).toEqual({ line: 1, col: 0 });
+    editor.handleInput('X');
+    expect(editor.getText()).toBe('first\nX\nmiddle line!\nlast');
   });
 
   it('End preserves a final multi-code-unit grapheme before appended text', () => {

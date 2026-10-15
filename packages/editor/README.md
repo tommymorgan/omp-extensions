@@ -4,11 +4,13 @@ Home/End navigation and undo/redo in one composed editor. Tested against OMP 18.
 
 | Shortcut | Behavior |
 | --- | --- |
-| Home / End | Navigate within the displayed row in insert mode |
+| Home / End | Navigate to the beginning/end of the current displayed row in insert mode, including wrapped rows |
 | Ctrl+Home / Ctrl+End | Navigate to the beginning/end of the entire draft in insert mode |
 | Ctrl+Shift+Z / Ctrl+Shift+Y | Undo / redo |
 
-Single-line Home/End and whole-draft Ctrl+Home/End have automated regression coverage. Plain Home/End behavior on multiline and wrapped drafts has not been fully validated.
+Home/End use source spans from the host renderer and caret-only native edits: no simulated arrows and no independent wrapping algorithm. End stays on the same displayed row; at a hard wrap it stops before the final grapheme when the next insertion position belongs to the following row. On a logical line's final row, End moves after its final character. Typing immediately after Home honors the selected insertion point instead of the host's default first-edit history anchor.
+
+Regression coverage includes interior wrapped rows of recalled prompts, continued history browsing, word wrapping, Unicode grapheme boundaries, terminal resizing, scrolled viewports, explicit newlines, empty lines, and undo/redo after editing a recalled prompt.
 
 ## Local installation
 

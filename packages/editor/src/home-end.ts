@@ -1,19 +1,18 @@
-import { matchesKey } from '@oh-my-pi/pi-tui';
+import { type EditorTextDecorationContext, getSegmenter, matchesKey } from '@oh-my-pi/pi-tui';
 import { UndoRedoEditor } from './undo-redo.ts';
 
-const DOWN_ARROW = '\x1b[B';
-const RIGHT_ARROW = '\x1b[C';
-const UP_ARROW = '\x1b[A';
-const MAX_KEY_PRESSES = 128;
-const MAX_NAVIGATION_MS = 80;
-
-interface NavigationBudget {
-  remaining: number;
-  deadline: number;
-}
-
 export class HomeEndEditor extends UndoRedoEditor {
+  #preserveCursor = false;
+  #renderWidth = 80;
+
+  override render(width: number): readonly string[] {
+    this.#renderWidth = width;
+    return super.render(width);
+  }
+
   override handleInput(data: string): void {
+    const preserveCursor = this.#preserveCursor;
+    this.#preserveCursor = false;
     if (this.vimMode !== 'insert') {
       super.handleInput(data);
       return;
@@ -23,92 +22,84 @@ export class HomeEndEditor extends UndoRedoEditor {
     if (matchesKey(data, 'ctrl+home')) {
       this.breakEditGroup();
       this.moveToMessageStart();
+      this.#preserveCursor = true;
       return;
     }
     if (matchesKey(data, 'ctrl+end')) {
       this.breakEditGroup();
       this.moveToMessageEnd();
+      this.#preserveCursor = true;
       return;
     }
 
-    if (matchesKey(data, 'home') || matchesKey(data, 'end')) {
+    if (matchesKey(data, 'home')) {
       this.breakEditGroup();
-      const budget = {
-        remaining: MAX_KEY_PRESSES,
-        deadline: performance.now() + MAX_NAVIGATION_MS,
+      this.#moveWithinDisplayedRow(false);
+      this.#preserveCursor = true;
+      return;
+    }
+    if (matchesKey(data, 'end')) {
+      this.breakEditGroup();
+      this.#moveWithinDisplayedRow(true);
+      this.#preserveCursor = true;
+      return;
+    }
+
+    super.handleInput(data, preserveCursor);
+  }
+
+  #displayedRow(): EditorTextDecorationContext | undefined {
+    const cursor = this.getCursor();
+    const decorateText = this.decorateText;
+    const focused = this.focused;
+    const terminalCursor = this.getUseTerminalCursor();
+    let row: EditorTextDecorationContext | undefined;
+    try {
+      // A non-focused hardware cursor leaves each rendered source span whole:
+      // no software glyph or cursor marker splits the decoration callbacks.
+      this.focused = false;
+      this.setUseTerminalCursor(true);
+      this.decorateText = (text, context) => {
+        if (context.line === cursor.line &&
+            (!row || (context.startCol <= cursor.col && context.startCol >= row.startCol))) {
+          row = context;
+        }
+        return text;
       };
-      this.moveWithinDisplayedRow(matchesKey(data, 'end'), budget);
-      return;
+      super.render(this.#renderWidth);
+    } finally {
+      this.decorateText = decorateText;
+      this.focused = focused;
+      this.setUseTerminalCursor(terminalCursor);
     }
-
-    super.handleInput(data);
+    return row;
   }
 
-  /** Never synthesize more than the shared per-key budget; one reserved cleanup press may cross the deadline. */
-  private press(key: string, budget: NavigationBudget, cleanup = false): boolean {
-    if (budget.remaining === 0 || (!cleanup && performance.now() >= budget.deadline)) return false;
-    budget.remaining--;
-    super.handleInput(key);
-    return true;
+  #moveToColumn(col: number): void {
+    const cursor = this.getCursor();
+    const lines = this.getLines();
+    let offset = col;
+    for (let line = 0; line < cursor.line; line++) offset += (lines[line]?.length ?? 0) + 1;
+    // A zero-length native edit moves only the caret: no history navigation,
+    // text-change callback, paste expansion, or undo entry.
+    this.applyHostEdit({ from: 0, to: 0, text: '', cursor: offset, len: this.getText().length });
   }
 
-  private displayedRowBoundaries(budget: NavigationBudget): { start: number; nextStart?: number } | undefined {
-    const original = this.getCursor();
-    const lineLength = this.getText().split('\n')[original.line]?.length ?? 0;
-    const starts = [0];
-    this.moveToLineStart();
-
-    // Down uses the base editor's visual-row map. It may retain a preferred column,
-    // so stop if it stops advancing rather than assuming it found another row.
-    while (budget.remaining > 1 && performance.now() < budget.deadline) {
-      const before = this.getCursor();
-      if (!this.press(DOWN_ARROW, budget)) return undefined;
-      const after = this.getCursor();
-      if (after.line !== original.line) {
-        this.press(UP_ARROW, budget, true);
-        break;
-      }
-      if (after.col <= before.col) break;
-      // Down on the final displayed row jumps after the last character.
-      // That insertion position is not the start of another displayed row.
-      if (after.col === lineLength) break;
-      starts.push(after.col);
-    }
-
-    // An incomplete scan cannot identify the row that contained the original cursor.
-    if (budget.remaining <= 1 || performance.now() >= budget.deadline) return undefined;
-    let row = 0;
-    while (row + 1 < starts.length && (starts[row + 1] ?? 0) <= original.col) row++;
-    return { start: starts[row] ?? 0, nextStart: starts[row + 1] };
-  }
-
-  private moveWithinDisplayedRow(toEnd: boolean, budget: NavigationBudget): void {
-    const line = this.getCursor().line;
-    const bounds = this.displayedRowBoundaries(budget);
-    if (!bounds) {
-      if (toEnd) this.moveToLineEnd();
-      else this.moveToLineStart();
-      return;
-    }
-
-    this.moveToLineStart();
-    while (this.getCursor().col < bounds.start) {
-      const before = this.getCursor();
-      if (!this.press(DOWN_ARROW, budget)) return;
-      const after = this.getCursor();
-      if (after.line !== line || after.col <= before.col) return;
-    }
+  #moveWithinDisplayedRow(toEnd: boolean): void {
+    const row = this.#displayedRow();
+    if (!row) return; // Empty logical lines already have their only caret position.
+    this.#moveToColumn(toEnd ? row.endCol : row.startCol);
     if (!toEnd) return;
-    if (bounds.nextStart === undefined) {
-      this.moveToLineEnd();
-      return;
-    }
 
-    while (this.getCursor().col < bounds.nextStart - 1) {
-      const before = this.getCursor();
-      if (!this.press(RIGHT_ARROW, budget)) return;
-      const after = this.getCursor();
-      if (after.line !== line || after.col <= before.col) return;
+    // A span's end can be the next row's start. Keep End on the original
+    // displayed row, backing up by one whole grapheme only in that case.
+    const endRow = this.#displayedRow();
+    if (!endRow || endRow.startCol === row.startCol) return;
+    const line = this.getLines()[row.line] ?? '';
+    let col = row.startCol;
+    for (const segment of getSegmenter().segment(line.slice(row.startCol, row.endCol))) {
+      col = row.startCol + segment.index;
     }
+    this.#moveToColumn(col);
   }
 }
