@@ -11,7 +11,7 @@ export type ReceiverHost = {
   report: (message: string) => void;
 };
 
-/** One generation owns one exact session/handle/transport; no credentials or timers are owned here. */
+/** One generation owns one exact session/handle/transport; transport and credentials remain host-owned. */
 export function createReceiver(host: ReceiverHost) {
   let binding: Binding | undefined;
   let active: {
@@ -24,6 +24,7 @@ export function createReceiver(host: ReceiverHost) {
     ready: boolean;
     revision: number;
     version: string;
+    confirmation: PromiseWithResolvers<void>;
   } | undefined;
   let operations = Promise.resolve();
   const report = () => host.report("Kizn instruction subscription failed. Guidance is not current; reconnect Kizn or refresh instructions before writing.");
@@ -75,6 +76,7 @@ export function createReceiver(host: ReceiverHost) {
       binding, connection, abort: new AbortController(),
       uri: `kizn://instructions/${encodeURIComponent(binding.handle)}`,
       dirty: true, reading: false, ready: false, revision: 0, version: binding.version,
+      confirmation: Promise.withResolvers<void>(),
     };
     active = state;
     operations = operations.then(async () => {
@@ -84,6 +86,18 @@ export function createReceiver(host: ReceiverHost) {
         await connection.startListener();
         if (active !== state) return;
         await connection.request("resources/subscribe", { uri: state.uri }, state.abort.signal);
+        if (active !== state) return;
+        // Native listener startup is best-effort. Kizn's initial invalidation proves end-to-end delivery.
+        const confirmed = Promise.withResolvers<void>();
+        const timer = setTimeout(() => confirmed.reject(new Error("Kizn notification delivery was not established")), 10_000);
+        const onAbort = () => confirmed.reject(state.abort.signal.reason);
+        state.abort.signal.addEventListener("abort", onAbort, { once: true });
+        void state.confirmation.promise.then(confirmed.resolve);
+        try { await confirmed.promise; }
+        finally {
+          clearTimeout(timer);
+          state.abort.signal.removeEventListener("abort", onAbort);
+        }
         if (active !== state) return;
         state.ready = true;
         await refresh(state);
@@ -117,6 +131,7 @@ export function createReceiver(host: ReceiverHost) {
       if (server !== "kizn" || method !== "notifications/resources/updated" || !active) return Promise.resolve();
       const update = z.object({ uri: z.string() }).safeParse(params);
       if (!update.success || update.data.uri !== active.uri) return Promise.resolve();
+      active.confirmation.resolve();
       active.dirty = true;
       return refresh(active);
     },

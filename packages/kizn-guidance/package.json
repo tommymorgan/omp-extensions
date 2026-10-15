@@ -6,7 +6,6 @@
   "license": "UNLICENSED",
   "files": ["src", "README.md"],
   "omp": { "extensions": ["./src/index.ts"] },
-  "scripts": { "test": "bun test test" },
   "dependencies": { "zod": "^4.0.0" },
   "peerDependencies": { "@oh-my-pi/pi-coding-agent": "^18.10.4" },
   "devDependencies": { "@oh-my-pi/pi-coding-agent": "18.10.4" }

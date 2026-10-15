@@ -166,9 +166,12 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
       return guidance.success && guidance.data.details.sessionId === context?.sessionManager.getSessionId()
         && guidance.data.details.scope === scope && guidance.data.details.version === latest?.instructionsVersion;
     });
-    return {
-      // Retain only the current canonical snapshot, including after compaction or a session/scope transition.
-      messages: event.messages.filter((message, index) => !GuidanceMessage.safeParse(message).success || index === last),
-    };
+    const messages = event.messages.filter((message, index) => !GuidanceMessage.safeParse(message).success || index === last);
+    // Compaction and an aside queued after the drain can both leave the outgoing context without its snapshot.
+    if (last === -1 && binding && latest) {
+      const message = instructionMessage(binding, latest);
+      messages.push({ ...message, role: "custom", timestamp: Date.now(), details: { ...message.details, scope } });
+    }
+    return { messages };
   });
 }
