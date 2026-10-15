@@ -1,0 +1,12 @@
+{
+  "name": "tommy-omp-kizn-guidance",
+  "version": "0.1.0",
+  "description": "Native authenticated Kizn instruction subscription context delivery for OMP",
+  "type": "module",
+  "license": "UNLICENSED",
+  "files": ["src", "README.md"],
+  "omp": { "extensions": ["./src/index.ts"] },
+  "dependencies": { "zod": "^4.0.0" },
+  "peerDependencies": { "@oh-my-pi/pi-coding-agent": "^18.10.4" },
+  "devDependencies": { "@oh-my-pi/pi-coding-agent": "18.10.4" }
+}
