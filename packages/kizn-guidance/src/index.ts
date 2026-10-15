@@ -13,6 +13,8 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
   let binding: Binding | undefined;
   let latest: Snapshot | undefined;
+  let stale = true;
+  const failureNotice = "Kizn instruction subscription failed. Guidance is not current; reconnect Kizn or refresh instructions before writing.";
   let scope = crypto.randomUUID();
   let controller = new AbortController();
   let starting: Promise<void> | undefined;
@@ -21,9 +23,16 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
   const adapters = new WeakMap<object, Connection>();
 
   function report(): void {
-    const message = "Kizn instruction subscription failed. Guidance is not current; reconnect Kizn or refresh instructions before writing.";
-    if (context?.hasUI) context.ui.notify(message, "warning");
-    else console.error(message);
+    stale = true;
+    if (context?.hasUI) context.ui.notify(failureNotice, "warning");
+    else console.error(failureNotice);
+  }
+
+  function deliver(owner: Binding, snapshot: Snapshot): void {
+    if (owner.sessionId !== context?.sessionManager.getSessionId() || owner.handle !== binding?.handle) return;
+    latest = snapshot;
+    const message = instructionMessage(owner, snapshot);
+    pi.sendMessage({ ...message, details: { ...message.details, scope } }, { deliverAs: "aside" });
   }
 
   const receiver = createReceiver({
@@ -50,20 +59,18 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
       }
       return adapter;
     },
-    deliver(owner, snapshot) {
-      if (owner.sessionId !== context?.sessionManager.getSessionId() || owner.handle !== binding?.handle) return;
-      latest = snapshot;
-      const message = instructionMessage(owner, snapshot);
-      pi.sendMessage({ ...message, details: { ...message.details, scope } }, { deliverAs: "aside" });
+    deliver,
+    confirm(owner) {
+      if (owner.sessionId === context?.sessionManager.getSessionId() && owner.handle === binding?.handle) stale = false;
     },
     report,
   });
 
-  function bootstrap(): Promise<void> {
+  function bootstrap(renew = false): Promise<void> {
     if (starting) return starting;
     const ctx = context;
     const native = manager?.getConnection("kizn");
-    if (!ctx || !native || binding) return Promise.resolve();
+    if (!ctx || !native || (binding && !renew)) return Promise.resolve();
     const generation = scope;
     const sessionId = ctx.sessionManager.getSessionId();
     const signal = controller.signal;
@@ -83,9 +90,13 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
         if (generation !== scope || signal.aborted || manager?.getConnection("kizn") !== native
           || ctx.sessionManager.getSessionId() !== sessionId) return;
         const started = readStartedSession(result);
+        const previousVersion = latest?.instructionsVersion;
         binding = { sessionId, handle: started.handle, version: started.instructionsVersion };
         latest = { instructionsVersion: started.instructionsVersion, instructions: started.instructions };
         await receiver.bind(binding);
+        if (generation === scope && binding?.handle === started.handle
+          && previousVersion && previousVersion !== started.instructionsVersion
+          && latest?.instructionsVersion === started.instructionsVersion) deliver(binding, latest);
       } catch {
         if (generation === scope && !signal.aborted) report();
       }
@@ -104,15 +115,15 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     detach = manager?.addConnectionStatusListener(event => {
       if (!("serverName" in event) || event.serverName !== "kizn") return;
       if (event.type === "connected") {
-        if (binding) void receiver.reconnect();
-        else {
-          controller.abort();
-          controller = new AbortController();
-          scope = crypto.randomUUID();
-          starting = undefined;
-          void bootstrap();
-        }
+        controller.abort();
+        controller = new AbortController();
+        scope = crypto.randomUUID();
+        stale = true;
+        starting = undefined;
+        receiver.disconnect();
+        void bootstrap(true);
       } else if (event.type === "reconnecting" || event.type === "failed") {
+        stale = true;
         receiver.disconnect();
       }
     });
@@ -125,6 +136,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     const generation = scope;
     binding = undefined;
     latest = undefined;
+    stale = true;
     starting = undefined;
     await receiver.bind(undefined);
     if (generation !== scope) return;
@@ -166,12 +178,19 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
       return guidance.success && guidance.data.details.sessionId === context?.sessionManager.getSessionId()
         && guidance.data.details.scope === scope && guidance.data.details.version === latest?.instructionsVersion;
     });
-    const messages = event.messages.filter((message, index) => !GuidanceMessage.safeParse(message).success || index === last);
+    const messages = event.messages.filter((message, index) =>
+      !(message.role === "custom" && message.customType === "kizn-guidance-status")
+      && (!GuidanceMessage.safeParse(message).success || index === last));
     // Compaction and an aside queued after the drain can both leave the outgoing context without its snapshot.
     if (last === -1 && binding && latest) {
       const message = instructionMessage(binding, latest);
       messages.push({ ...message, role: "custom", timestamp: Date.now(), details: { ...message.details, scope } });
     }
+    if (stale && context) messages.push({
+      role: "custom", customType: "kizn-guidance-status", display: false, timestamp: Date.now(),
+      content: JSON.stringify({ kiznInstructions: latest ? "stale" : "unavailable", message: failureNotice }),
+      details: { scope },
+    });
     return { messages };
   });
 }

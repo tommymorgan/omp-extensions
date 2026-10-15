@@ -8,8 +8,16 @@ export type Connection = {
 export type ReceiverHost = {
   connection: () => Connection | undefined;
   deliver: (binding: Binding, snapshot: Snapshot) => void;
+  confirm: (binding: Binding) => void;
   report: (message: string) => void;
 };
+
+function createConfirmation() {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((accept, refuse) => { resolve = accept; reject = refuse; });
+  return { promise, resolve, reject };
+}
 
 /** One generation owns one exact session/handle/transport; transport and credentials remain host-owned. */
 export function createReceiver(host: ReceiverHost) {
@@ -24,7 +32,7 @@ export function createReceiver(host: ReceiverHost) {
     ready: boolean;
     revision: number;
     version: string;
-    confirmation: PromiseWithResolvers<void>;
+    confirmation: ReturnType<typeof createConfirmation>;
   } | undefined;
   let operations = Promise.resolve();
   const report = () => host.report("Kizn instruction subscription failed. Guidance is not current; reconnect Kizn or refresh instructions before writing.");
@@ -42,6 +50,7 @@ export function createReceiver(host: ReceiverHost) {
         const snapshot = readSnapshot(result, state.uri);
         // A notification arriving during the read invalidates that read: publish only the final coalesced snapshot.
         if (state.dirty) continue;
+        host.confirm(state.binding);
         if (snapshot.instructionsVersion === state.version) continue;
         host.deliver(state.binding, snapshot);
         state.version = snapshot.instructionsVersion;
@@ -52,6 +61,7 @@ export function createReceiver(host: ReceiverHost) {
       if (active === state && !state.abort.signal.aborted) report();
     } finally {
       state.reading = false;
+      if (state.dirty && active === state && !state.abort.signal.aborted) void refresh(state);
     }
   }
 
@@ -76,7 +86,7 @@ export function createReceiver(host: ReceiverHost) {
       binding, connection, abort: new AbortController(),
       uri: `kizn://instructions/${encodeURIComponent(binding.handle)}`,
       dirty: true, reading: false, ready: false, revision: 0, version: binding.version,
-      confirmation: Promise.withResolvers<void>(),
+      confirmation: createConfirmation(),
     };
     active = state;
     operations = operations.then(async () => {
@@ -88,7 +98,7 @@ export function createReceiver(host: ReceiverHost) {
         await connection.request("resources/subscribe", { uri: state.uri }, state.abort.signal);
         if (active !== state) return;
         // Native listener startup is best-effort. Kizn's initial invalidation proves end-to-end delivery.
-        const confirmed = Promise.withResolvers<void>();
+        const confirmed = createConfirmation();
         const timer = setTimeout(() => confirmed.reject(new Error("Kizn notification delivery was not established")), 10_000);
         const onAbort = () => confirmed.reject(state.abort.signal.reason);
         state.abort.signal.addEventListener("abort", onAbort, { once: true });
