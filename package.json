@@ -3,8 +3,9 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test packages/editor/test packages/kizn-guidance/test",
+    "test": "bun test packages/editor/test packages/kizn-guidance/test packages/trailboss/test",
     "test:editor": "bun test packages/editor/test",
-    "test:kizn-guidance": "bun test packages/kizn-guidance/test"
+    "test:kizn-guidance": "bun test packages/kizn-guidance/test",
+    "test:trailboss": "bun test packages/trailboss/test"
   }
 }

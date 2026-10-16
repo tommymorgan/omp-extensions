@@ -1,4 +1,6 @@
 import { expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import installTrailboss from "../../trailboss/src/index.ts";
 
 let currentManager;
 mock.module("@oh-my-pi/pi-coding-agent/mcp/manager", () => ({
@@ -7,11 +9,26 @@ mock.module("@oh-my-pi/pi-coding-agent/mcp/manager", () => ({
 const { default: install } = await import("../src/index.ts");
 const instructions = { bootstrap: "Scoped", rules: [], memories: [], referencedItems: [], catalog: {}, agentGuidance: {} };
 
-function harness() {
+function harness(trailbossFirst = false, solo = false) {
   const handlers = new Map();
+  const bus = new EventEmitter();
+  async function emit(event, value = {}, context = ctx) {
+    notificationContext = context;
+    let result;
+    for (const handler of handlers.get(event) ?? []) {
+      const next = await handler(value, context);
+      if (next !== undefined) {
+        result = next;
+        if (event === "context") value = { ...value, messages: next.messages };
+      }
+    }
+    return result;
+  }
   const sent = [];
   const calls = [];
   const statuses = new Set();
+  const publications = [];
+  bus.on("trailboss:context:publish", publication => publications.push(publication));
   let version = "v1";
   let notificationContext;
   let start = async () => ({ content: [{ type: "text", text: JSON.stringify({ handle: "private-subscription", instructionsVersion: version, instructions }) }] });
@@ -22,7 +39,7 @@ function harness() {
       async request(method, params) {
         calls.push({ method, params });
         if (method === "tools/call") return start(params);
-        if (method === "resources/subscribe") queueMicrotask(() => handlers.get("mcp_notification")?.({
+        if (method === "resources/subscribe") queueMicrotask(() => void emit("mcp_notification", {
           server: "kizn", method: "notifications/resources/updated", params: { uri: params.uri },
         }, notificationContext));
         if (method === "resources/read") return { contents: [{ uri: params.uri, mimeType: "application/json", text: JSON.stringify({ instructionsVersion: version, instructions }) }] };
@@ -36,20 +53,31 @@ function harness() {
   };
   const ctx = { cwd: "/repo", hasUI: false, sessionManager: { getSessionId: () => "session-one" } };
   notificationContext = ctx;
-  install({
-    on(name, handler) { handlers.set(name, handler); },
+  const api = {
+    on(name, handler) {
+      const current = handlers.get(name) ?? [];
+      current.push(handler);
+      handlers.set(name, current);
+    },
+    events: {
+      emit: (name, value) => bus.emit(name, value),
+      on(name, handler) { bus.on(name, handler); return () => bus.off(name, handler); },
+    },
     async exec(command, args) {
       calls.push({ method: command, args });
       const remote = args[1] === "/repo-b" ? "two" : "one";
       return { code: 0, stdout: `origin\tgit@example.test:${remote}/repo.git (fetch)\norigin\tgit@example.test:${remote}/repo.git (push)\n`, stderr: "" };
     },
     sendMessage(message, options) { sent.push({ message, options }); },
-  });
+  };
+  for (const extension of solo ? [install] : trailbossFirst ? [installTrailboss, install] : [install, installTrailboss]) extension(api);
   return {
-    calls, sent, ctx, statuses,
-    emit: (event, value = {}, context = ctx) => {
-      notificationContext = context;
-      return handlers.get(event)?.(value, context);
+    calls, sent, ctx, statuses, publications,
+    emit,
+    async prepare(context = ctx) {
+      await emit("before_agent_start", {}, context);
+      const prepared = await emit("context", { messages: [] }, context);
+      return { message: prepared.messages.find(message => message.customType === "kizn-guidance") };
     },
     version(next) { version = next; },
     start(next) { start = next; },
@@ -59,16 +87,16 @@ function harness() {
 test("private bootstrap supplies model context independently of model tool calls", async () => {
   const h = harness();
   await h.emit("session_start");
-  const prepared = await h.emit("before_agent_start");
+  const prepared = await h.prepare();
   expect(prepared.message.content).toContain('"instructionsVersion":"v1"');
   expect(prepared.message.content).not.toContain("private-subscription");
   h.version("v2");
   await h.emit("mcp_notification", { server: "kizn", method: "notifications/resources/updated", params: { uri: "kizn://instructions/private-subscription" } });
-  expect(h.sent).toHaveLength(1);
-  expect(h.sent[0].message.content).toContain('"instructionsVersion":"v2"');
-  expect(h.sent[0].message.content).not.toContain("private-subscription");
-  const context = await h.emit("context", { messages: [prepared.message, h.sent[0].message] });
-  expect(context.messages).toEqual([h.sent[0].message]);
+  expect(h.sent).toEqual([]);
+  const context = await h.emit("context", { messages: [prepared.message] });
+  const snapshots = context.messages.filter(message => message.customType === "kizn-guidance");
+  expect(snapshots.map(message => message.details.version)).toEqual(["v2"]);
+  expect(snapshots[0].content).not.toContain("private-subscription");
   await h.emit("session_shutdown");
   expect(h.statuses.size).toBe(0);
 });
@@ -76,13 +104,13 @@ test("private bootstrap supplies model context independently of model tool calls
 test("forks create a fresh scoped session and exclude inherited instruction messages", async () => {
   const h = harness();
   await h.emit("session_start");
-  const old = await h.emit("before_agent_start");
+  const old = await h.prepare();
   const fork = { ...h.ctx, sessionManager: { getSessionId: () => "session-fork" } };
   await h.emit("session_branch", {}, fork);
-  const prepared = await h.emit("before_agent_start", {}, fork);
+  const prepared = await h.prepare(fork);
   expect(h.calls.filter(c => c.method === "tools/call")).toHaveLength(2);
   const context = await h.emit("context", { messages: [old.message, prepared.message] }, fork);
-  expect(context.messages).toEqual([prepared.message]);
+  expect(context.messages.map(message => message.details.sessionId)).toEqual(["session-fork"]);
   await h.emit("session_shutdown");
 });
 
@@ -107,7 +135,7 @@ test("overlapping activation callbacks can bootstrap only the final conversation
   const fork = { ...h.ctx, sessionManager: { getSessionId: () => "final-conversation" } };
   const second = h.emit("session_switch", {}, fork);
   await Promise.all([first, second]);
-  const prepared = await h.emit("before_agent_start", {}, fork);
+  const prepared = await h.prepare(fork);
   expect(prepared.message.details.sessionId).toBe("final-conversation");
   expect(h.calls.filter(c => c.method === "tools/call")).toHaveLength(1);
   await h.emit("session_shutdown");
@@ -117,23 +145,24 @@ test("compaction retry restores the complete current snapshot without another ag
   const h = harness();
   try {
     await h.emit("session_start");
-    const initial = await h.emit("before_agent_start");
+    const initial = await h.prepare();
     const tail = { role: "user", content: "Retained compaction tail" };
     const restored = await h.emit("context", { messages: [tail] });
-    expect(restored.messages[0]).toEqual(tail);
-    expect(restored.messages.at(-1)?.content).toEqual(initial.message.content);
+    expect(restored.messages.at(-1)).toEqual(tail);
+    expect(restored.messages[0]?.content).toEqual(initial.message.content);
   } finally { await h.emit("session_shutdown"); }
 });
 
-test("a replacement queued after the aside drain remains available at the next context boundary", async () => {
+test("a notification replaces context without waking or waiting for another agent-start event", async () => {
   const h = harness();
   try {
     await h.emit("session_start");
-    const initial = await h.emit("before_agent_start");
+    const initial = await h.prepare();
     h.version("v2");
     await h.emit("mcp_notification", { server: "kizn", method: "notifications/resources/updated", params: { uri: "kizn://instructions/private-subscription" } });
     const outgoing = await h.emit("context", { messages: [initial.message] });
-    expect(outgoing.messages.map(message => message.content)).toEqual([h.sent[0].message.content]);
+    expect(outgoing.messages.filter(message => message.customType === "kizn-guidance").map(message => message.details.version)).toEqual(["v2"]);
+    expect(h.sent).toEqual([]);
   } finally { await h.emit("session_shutdown"); }
 });
 
@@ -153,9 +182,8 @@ test("reconnecting replaces an expired private handle and catches up canonical g
     h.start(async () => ({ content: [{ type: "text", text: JSON.stringify({ handle: "renewed-private", instructionsVersion: "v2", instructions }) }] }));
     for (const status of h.statuses) status({ serverName: "kizn", type: "connected" });
     await new Promise(resolve => setImmediate(resolve));
-    const prepared = await h.emit("before_agent_start");
+    const prepared = await h.prepare();
     expect(prepared.message.details.version).toBe("v2");
-    expect(h.sent.map(entry => entry.message.details.version)).toEqual(["v2"]);
   } finally { await h.emit("session_shutdown"); }
 });
 
@@ -166,7 +194,7 @@ test("pending and failed refresh stays stale until a successful same-version rea
   const pending = Promise.withResolvers();
   try {
     await h.emit("session_start");
-    const prepared = await h.emit("before_agent_start");
+    const prepared = await h.prepare();
     const native = currentManager.getConnection("kizn");
     const request = native.transport.request.bind(native.transport);
     native.transport.request = async (method, params) => {
@@ -193,7 +221,7 @@ test("disabling the native server retains last policy but marks it stale in outg
   const h = harness();
   try {
     await h.emit("session_start");
-    const prepared = await h.emit("before_agent_start");
+    const prepared = await h.prepare();
     currentManager.getConnection = () => undefined;
     await h.emit("before_agent_start");
     const outgoing = await h.emit("context", { messages: [prepared.message] });
@@ -202,10 +230,50 @@ test("disabling the native server retains last policy but marks it stale in outg
     expect(JSON.parse(notice?.content ?? "{}").kiznInstructions).toBe("stale");
   } finally { await h.emit("session_shutdown"); }
 });
+test("an unchanged instructionsVersion is not re-published on every agent turn", async () => {
+  const h = harness();
+  try {
+    await h.emit("session_start");
+    await h.prepare();
+    expect(h.publications).toHaveLength(1);
+    await h.emit("before_agent_start");
+    expect(h.publications).toHaveLength(1);
+    // A fresh activation (restart/resume of the same session) resets the gate
+    // and delivers once more, then gates again.
+    await h.emit("session_start");
+    expect(h.publications).toHaveLength(2);
+    await h.prepare();
+    expect(h.publications).toHaveLength(2);
+    h.version("v2");
+    await h.emit("mcp_notification", { server: "kizn", method: "notifications/resources/updated", params: { uri: "kizn://instructions/private-subscription" } });
+    expect(h.publications).toHaveLength(3);
+    expect(h.publications.at(-1).message.details.version).toBe("v2");
+  } finally { await h.emit("session_shutdown"); }
+});
 
-for (const boundary of ["agent start", "provider retry"]) {
-  test(`moving the same conversation rebinds repository scope at ${boundary}`, async () => {
-    const h = harness();
+test("the context handler reuses a persisted same-version entry regardless of its original scope", async () => {
+  const h = harness(false, true);
+  h.ctx.hasUI = true;
+  h.ctx.ui = { notify() {} };
+  try {
+    await h.emit("session_start");
+    const persisted = {
+      role: "custom", customType: "kizn-guidance", display: false, timestamp: 1, content: "snapshot",
+      details: { sessionId: "session-one", scope: "scope-from-an-earlier-activation", version: "v1" },
+    };
+    const context = await h.emit("context", { messages: [{ role: "user", content: "hi" }, persisted, { role: "user", content: "bye" }] });
+    const guidance = context.messages.filter(message => message.customType === "kizn-guidance");
+    expect(guidance).toHaveLength(1);
+    expect(guidance[0]).toBe(persisted);
+  } finally { await h.emit("session_shutdown"); }
+});
+
+for (const [boundary, trailbossFirst] of [
+  ["agent start", false], ["provider retry", false],
+  ["agent start", true], ["provider retry", true],
+]) {
+  test(`moving the same conversation rebinds repository scope at ${boundary}, bridge first: ${trailbossFirst}`, async () => {
+    const h = harness(trailbossFirst);
     const native = currentManager.getConnection("kizn");
     const request = native.transport.request.bind(native.transport);
     h.start(async params => {
@@ -224,10 +292,10 @@ for (const boundary of ["agent start", "provider retry"]) {
     };
     try {
       await h.emit("session_start");
-      const initial = await h.emit("before_agent_start");
+      const initial = await h.prepare();
       h.ctx.cwd = "/repo-b";
       if (boundary === "agent start") {
-        const moved = await h.emit("before_agent_start");
+        const moved = await h.prepare();
         expect(moved.message.details.version).toBe("v2");
       }
       const outgoing = await h.emit("context", { messages: [initial.message] });

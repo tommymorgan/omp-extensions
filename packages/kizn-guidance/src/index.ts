@@ -14,6 +14,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
   let scopeCwd: string | undefined;
   let binding: Binding | undefined;
   let latest: Snapshot | undefined;
+  let deliveredVersion: string | undefined;
   let stale = true;
   const failureNotice = "Kizn instruction subscription failed. Guidance is not current; reconnect Kizn or refresh instructions before writing.";
   let scope = crypto.randomUUID();
@@ -36,8 +37,24 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
   function deliver(owner: Binding, snapshot: Snapshot): void {
     if (!owns(owner)) return;
     latest = snapshot;
-    const message = instructionMessage(owner, snapshot);
-    pi.sendMessage({ ...message, details: { ...message.details, scope } }, { deliverAs: "aside" });
+    // Re-publishing an unchanged instructionsVersion only churns the receiver
+    // cache and the request tail; skip until the version actually changes.
+    // activate()/session_shutdown reset the gate so a fresh activation still
+    // delivers once. A refused (unaccepted) delivery never sets the gate, so
+    // retry semantics when the Trailboss receiver is missing are unchanged.
+    if (deliveredVersion === snapshot.instructionsVersion) return;
+    let accepted = false;
+    pi.events.emit("trailboss:context:publish", {
+      source: "kizn-guidance",
+      sessionId: owner.sessionId,
+      message: {
+        ...instructionMessage(owner, snapshot),
+        details: { sessionId: owner.sessionId, version: snapshot.instructionsVersion, scope },
+      },
+      accept() { accepted = true; },
+    });
+    if (!accepted) throw new Error("Kizn guidance requires the Trailboss OMP Integration extension");
+    deliveredVersion = snapshot.instructionsVersion;
   }
 
   const receiver = createReceiver({
@@ -99,12 +116,10 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
         if (generation !== scope || signal.aborted || manager?.getConnection("kizn") !== native
           || ctx.cwd !== cwd || ctx.sessionManager.getSessionId() !== sessionId) return;
         const started = readStartedSession(result);
-        const previousVersion = latest?.instructionsVersion;
         binding = { sessionId, handle: started.handle, version: started.instructionsVersion };
         latest = { instructionsVersion: started.instructionsVersion, instructions: started.instructions };
         await receiver.bind(binding);
         if (generation === scope && binding?.handle === started.handle
-          && previousVersion && previousVersion !== started.instructionsVersion
           && latest?.instructionsVersion === started.instructionsVersion) deliver(binding, latest);
       } catch {
         if (generation === scope && !signal.aborted) report();
@@ -146,6 +161,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     const generation = scope;
     binding = undefined;
     latest = undefined;
+    deliveredVersion = undefined;
     stale = true;
     starting = undefined;
     await receiver.bind(undefined);
@@ -166,6 +182,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     scopeCwd = undefined;
     binding = undefined;
     latest = undefined;
+    deliveredVersion = undefined;
     starting = undefined;
     detach?.();
     detach = undefined;
@@ -176,8 +193,7 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     if (scopeCwd !== ctx.cwd || context?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) await activate(ctx);
     else { attach(ctx); await bootstrap(); }
     if (!binding || !latest) return;
-    const message = instructionMessage(binding, latest);
-    return { message: { ...message, details: { ...message.details, scope } } };
+    deliver(binding, latest);
   });
   pi.on("mcp_notification", (event, ctx) => {
     if (binding?.sessionId !== ctx.sessionManager.getSessionId()) return;
@@ -189,16 +205,30 @@ export default function kiznGuidance(pi: ExtensionAPI): void {
     const last = event.messages.findLastIndex(message => {
       const guidance = GuidanceMessage.safeParse(message);
       return guidance.success && guidance.data.details.sessionId === context?.sessionManager.getSessionId()
-        && guidance.data.details.scope === scope && guidance.data.details.version === latest?.instructionsVersion;
+        // Scope-independent on purpose: an entry persisted by an earlier
+        // activation of this same session still satisfies the current version,
+        // so a restart reuses it in place instead of appending a duplicate
+        // ~130KB snapshot and moving the request divergence point.
+        && guidance.data.details.version === latest?.instructionsVersion;
     });
     const messages = event.messages.filter((message, index) =>
       !(message.role === "custom" && message.customType === "kizn-guidance-status")
       && (!GuidanceMessage.safeParse(message).success || index === last));
-    // Compaction and an aside queued after the drain can both leave the outgoing context without its snapshot.
+    // Pin the guidance to a stable request position: the first message.
+    // A tail append always sits after the turn's new content, so the
+    // provider cache diverges before it on every request and its ~32K
+    // tokens are re-billed uncached; index 0 stays inside the cached
+    // prefix for the life of the version. Rebinding here can publish
+    // after the shared context hook has already run.
+    let pinned;
     if (last === -1 && binding && latest) {
       const message = instructionMessage(binding, latest);
-      messages.push({ ...message, role: "custom", timestamp: Date.now(), details: { ...message.details, scope } });
+      pinned = { ...message, role: "custom", timestamp: Date.now(), details: { ...message.details, scope } };
+    } else {
+      const keptIndex = messages.findIndex(message => GuidanceMessage.safeParse(message).success);
+      if (keptIndex >= 0) pinned = messages.splice(keptIndex, 1)[0];
     }
+    if (pinned) messages.unshift(pinned);
     if (stale && context) messages.push({
       role: "custom", customType: "kizn-guidance-status", display: false, timestamp: Date.now(),
       content: JSON.stringify({ kiznInstructions: latest ? "stale" : "unavailable", message: "Kizn instructions are not current; refresh or reconnect before writing." }),

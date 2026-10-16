@@ -30,6 +30,21 @@
         "@oh-my-pi/pi-coding-agent": "^18.10.4",
       },
     },
+    "packages/trailboss": {
+      "name": "tommy-omp-trailboss",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "@oh-my-pi/pi-ai": "18.10.4",
+        "@oh-my-pi/pi-catalog": "18.10.4",
+        "@oh-my-pi/pi-coding-agent": "18.10.4",
+      },
+      "peerDependencies": {
+        "@oh-my-pi/pi-coding-agent": "^18.10.4",
+      },
+    },
   },
   "packages": {
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
@@ -297,6 +312,8 @@
     "tommy-omp-editor": ["tommy-omp-editor@workspace:packages/editor"],
 
     "tommy-omp-kizn-guidance": ["tommy-omp-kizn-guidance@workspace:packages/kizn-guidance"],
+
+    "tommy-omp-trailboss": ["tommy-omp-trailboss@workspace:packages/trailboss"],
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
