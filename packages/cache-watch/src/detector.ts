@@ -146,6 +146,8 @@ export class CacheWatchDetector {
   private belowStreak = 0;
   private recoveredStreak = 0;
   private alertActive = false;
+  /** A banner is currently raised (only warned alerts raise it, not suppressed ones). */
+  private bannerUp = false;
   private benignSuppressed = false;
   private windowStart = 0;
   private readonly injections: InjectionRecord[] = [];
@@ -214,6 +216,7 @@ export class CacheWatchDetector {
             rate,
             cause,
           });
+          this.bannerUp = true;
         }
       }
     } else if (rate >= ABSOLUTE_FLOOR) {
@@ -222,6 +225,12 @@ export class CacheWatchDetector {
       if (this.recoveredStreak >= RECOVERY_EVALUATIONS) {
         this.alertActive = false;
         this.benignSuppressed = false;
+        // Recovery clears a raised banner without restarting the session
+        // (plan Task 3.1); suppressed alerts never raised one.
+        if (this.bannerUp) {
+          this.bannerUp = false;
+          this.sink.banner?.(null);
+        }
       }
     } else {
       this.belowStreak = 0;
