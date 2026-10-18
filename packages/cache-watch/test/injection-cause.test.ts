@@ -82,4 +82,17 @@ describe('injection correlation and cause naming', () => {
     expect(warning?.message).toContain('"kizn-guidance"');
     expect(warning?.context?.cause).toEqual({ kind: 'injection', source: 'kizn-guidance', request: 43 });
   });
+
+  it('states that no context injection was recorded before the divergence', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+
+    // No injection in the 10 requests before the divergence at request 43.
+    driveSession(pi, request => (request === TOTAL_REQUESTS ? divergedAt(7) : prefixMessages()));
+
+    expect(pi.warnings.length).toBe(1);
+    const warning = pi.warnings[0];
+    expect(warning?.message).toContain('no context injection was recorded before the divergence');
+    expect(warning?.context?.cause).toEqual({ kind: 'none' });
+  });
 });

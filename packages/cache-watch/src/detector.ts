@@ -168,9 +168,9 @@ export class CacheWatchDetector {
             ? `; divergence at request ${this.lastDivergence.request} @ message index ${this.lastDivergence.messageIndex}`
             : '';
           const causeDetail =
-            cause !== null && cause.kind === 'injection'
+            cause.kind === 'injection'
               ? `; cause: nearest upstream injection from source "${cause.source}"`
-              : '';
+              : `; cause: no context injection was recorded before the divergence`;
           this.sink.warn(
             `cache-watch: prompt-cache collapse in session "${this.sessionId}": ` +
               `rolling ${WINDOW_SIZE}-response cache-read rate ${pct(rate)} is below the ` +
@@ -259,11 +259,10 @@ export class CacheWatchDetector {
    * Cause lookup: the nearest upstream injection is the ledger entry with the
    * greatest requestNumber at or before the divergence request; ties go to
    * the most recently recorded entry. No divergence or no upstream entry
-   * means no named cause.
    */
-  private resolveCause(): CollapseCause | null {
+  private resolveCause(): CollapseCause {
     const divergence = this.lastDivergence;
-    if (divergence === null) return null;
+    if (divergence === null) return { kind: 'none' };
     let nearest: InjectionRecord | null = null;
     for (const injection of this.injections) {
       if (injection.requestNumber > divergence.request) continue;
@@ -272,7 +271,7 @@ export class CacheWatchDetector {
       }
     }
     return nearest === null
-      ? null
+      ? { kind: 'none' }
       : { kind: 'injection', source: nearest.source, request: nearest.requestNumber };
   }
 

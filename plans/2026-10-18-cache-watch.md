@@ -101,11 +101,11 @@ Scenario: Alert names the nearest upstream injection
   When the collapse warning fires
   Then the warning names source "kizn-guidance" as the nearest upstream injection
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-divergence-attribution.feature::Injection-free collapse reports none
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Injection-free collapse reports none
   Given the divergence point is request 43 of session "cache-watch-demo" and no context injection was recorded in the 10 requests before it
   When the collapse warning fires

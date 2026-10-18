@@ -10,3 +10,8 @@ Feature: Cache divergence attribution
     And a context injection from source "kizn-guidance" was recorded between requests 42 and 43
     When the collapse warning fires
     Then the warning names source "kizn-guidance" as the nearest upstream injection
+
+  Scenario: Injection-free collapse reports none
+    Given the divergence point is request 43 of session "cache-watch-demo" and no context injection was recorded in the 10 requests before it
+    When the collapse warning fires
+    Then the warning states that no context injection was recorded before the divergence
