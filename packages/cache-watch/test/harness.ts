@@ -65,6 +65,19 @@ export function providerResponse(): unknown {
   return { type: 'after_provider_response', status: 200, headers: {}, requestId: null };
 }
 
+export interface RequestMessageLike {
+  role: string;
+  content: unknown;
+}
+
+/** before_provider_request fixture carrying a provider wire payload's message array. */
+export function beforeProviderRequest(messages: RequestMessageLike[]): unknown {
+  return {
+    type: 'before_provider_request',
+    payload: { model: 'test-model', max_tokens: 1024, messages },
+  };
+}
+
 export function benignEvent(type: string): unknown {
   return { type };
 }

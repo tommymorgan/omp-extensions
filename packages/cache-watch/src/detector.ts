@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Hybrid cache-collapse detector (ADR 0001). Thresholds are named constants
  * in this single module; there is no config surface in the MVP.
@@ -14,6 +16,15 @@ export interface TokenUsage {
   input: number;
   cacheRead: number;
   cacheWrite: number;
+}
+
+/**
+ * Divergence point carried in the warning detail (CONTEXT.md): the first
+ * request whose message-prefix hash stops matching its predecessor's.
+ */
+export interface DivergencePoint {
+  request: number;
+  messageIndex: number;
 }
 
 export interface AlertSink {
@@ -54,6 +65,27 @@ function pct(value: number): string {
 }
 
 /**
+ * Stable per-message serialization: object keys are sorted so a rebuild that
+ * only reorders keys still hashes identically; `undefined` fields are dropped.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, field]) => field !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, field]) => `${JSON.stringify(key)}:${stableStringify(field)}`);
+  return `{${entries.join(',')}}`;
+}
+
+/** Extracts the provider wire message list; null when the payload carries none. */
+function extractMessages(payload: unknown): unknown[] | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  if (!('messages' in payload)) return null;
+  return Array.isArray(payload.messages) ? payload.messages : null;
+}
+
+/**
  * Per-session rolling state machine. Cold sessions (< BASELINE_MIN_RESPONSES)
  * have no frozen baseline and never alert. A benign reset suppresses alerting
  * (annotating instead) until a recovery re-arms detection.
@@ -66,6 +98,9 @@ export class CacheWatchDetector {
   private alertActive = false;
   private benignSuppressed = false;
   private windowStart = 0;
+  private requestCount = 0;
+  private previousMessageHashes: string[] | null = null;
+  private lastDivergence: DivergencePoint | null = null;
 
   constructor(
     private readonly sessionId: string,
@@ -96,18 +131,21 @@ export class CacheWatchDetector {
             { sessionId: this.sessionId, baseline: this.baseline, rate },
           );
         } else {
-
+          const divergenceDetail = this.lastDivergence
+            ? `; divergence at request ${this.lastDivergence.request} @ message index ${this.lastDivergence.messageIndex}`
+            : '';
           this.sink.warn(
             `cache-watch: prompt-cache collapse in session "${this.sessionId}": ` +
               `rolling ${WINDOW_SIZE}-response cache-read rate ${pct(rate)} is below the ` +
               `${pct(ABSOLUTE_FLOOR)} floor and more than ${pct(RELATIVE_MARGIN)} below ` +
-              `baseline ${pct(this.baseline)}`,
+              `baseline ${pct(this.baseline)}${divergenceDetail}`,
             {
               sessionId: this.sessionId,
               baseline: this.baseline,
               rate,
               floor: ABSOLUTE_FLOOR,
               margin: RELATIVE_MARGIN,
+              divergence: this.lastDivergence,
             },
           );
         }
@@ -125,10 +163,45 @@ export class CacheWatchDetector {
     }
   }
 
+  /**
+   * Prefix fingerprint taken at before_provider_request (ADR 0002: the
+   * payload is hashed as received and never mutated). Records the first
+   * message index whose hash differs from the same index in the previous
+   * request; the first fingerprinted request has nothing to diverge from.
+   */
+  recordRequestPayload(payload: unknown): void {
+    const messages = extractMessages(payload);
+    if (messages === null) return;
+    this.requestCount += 1;
+    const hashes = messages.map(message =>
+      createHash('sha256').update(stableStringify(message)).digest('hex'),
+    );
+    const previous = this.previousMessageHashes;
+    this.previousMessageHashes = hashes;
+    if (previous === null) return;
+    // Only a changed or truncated prefix invalidates the prompt cache.
+    // Appended messages (a longer list) preserve the predecessor prefix,
+    // so they are never a divergence point.
+    const shared = Math.min(previous.length, hashes.length);
+    for (let index = 0; index < shared; index++) {
+      if (previous[index] !== hashes[index]) {
+        this.lastDivergence = { request: this.requestCount, messageIndex: index };
+        return;
+      }
+    }
+    if (hashes.length < previous.length) {
+      this.lastDivergence = { request: this.requestCount, messageIndex: hashes.length };
+    }
+  }
+
   benignReset(kind: string): void {
     this.belowStreak = 0;
     this.windowStart = this.responses.length;
     this.benignSuppressed = true;
+    // Compaction rewrites the message list for a benign reason; fingerprint
+    // state must not carry a compaction-caused divergence into later alerts.
+    this.previousMessageHashes = null;
+    this.lastDivergence = null;
     this.sink.debug(`cache-watch: benign reset (${kind}) recorded for session "${this.sessionId}"`);
   }
 }

@@ -73,11 +73,11 @@ Scenario: Cold session does not alert
 
 <!-- estimate: ~180 reviewable lines | feature-files: features/cache-divergence-attribution.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-divergence-attribution.feature::Alert reports the divergence point
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Alert reports the divergence point
   Given requests 40, 41 and 42 of session "cache-watch-demo" share an identical message-prefix hash and request 43's prefix hash first differs at message index 7
   When the collapse warning fires
