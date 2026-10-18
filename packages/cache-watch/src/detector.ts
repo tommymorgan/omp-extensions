@@ -65,6 +65,7 @@ export class CacheWatchDetector {
   private recoveredStreak = 0;
   private alertActive = false;
   private benignSuppressed = false;
+  private windowStart = 0;
 
   constructor(
     private readonly sessionId: string,
@@ -82,7 +83,7 @@ export class CacheWatchDetector {
     }
     if (this.baseline === null) return;
 
-    const rate = windowRate(this.responses.slice(-WINDOW_SIZE));
+    const rate = windowRate(this.responses.slice(this.windowStart).slice(-WINDOW_SIZE));
 
     if (rate < ABSOLUTE_FLOOR && this.baseline - rate > RELATIVE_MARGIN) {
       this.belowStreak += 1;
@@ -126,6 +127,7 @@ export class CacheWatchDetector {
 
   benignReset(kind: string): void {
     this.belowStreak = 0;
+    this.windowStart = this.responses.length;
     this.benignSuppressed = true;
     this.sink.debug(`cache-watch: benign reset (${kind}) recorded for session "${this.sessionId}"`);
   }

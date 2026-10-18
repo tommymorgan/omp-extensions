@@ -30,11 +30,11 @@ Scenario: Cache collapse triggers a warning alert
   Then a warning is logged naming session "cache-watch-demo", its baseline 94%, the current rolling rate, and both crossed thresholds
   And the warning is logged once for the collapse, not once per response
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-collapse-alert.feature::Benign compaction reset does not alert
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Benign compaction reset does not alert
   Given a session "cache-watch-demo" with a baseline cache-read rate of 94%
   When its rolling rate drops below both thresholds for 2 evaluations immediately after a session_compact event and then recovers above 85%
