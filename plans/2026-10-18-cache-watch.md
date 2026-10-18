@@ -90,11 +90,11 @@ Scenario: Alert reports the divergence point
 
 <!-- estimate: ~220 reviewable lines | feature-files: features/cache-divergence-attribution.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-divergence-attribution.feature::Alert names the nearest upstream injection
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Alert names the nearest upstream injection
   Given the divergence point is request 43 of session "cache-watch-demo"
   And a context injection from source "kizn-guidance" was recorded between requests 42 and 43

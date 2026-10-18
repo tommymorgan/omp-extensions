@@ -81,3 +81,23 @@ export function beforeProviderRequest(messages: RequestMessageLike[]): unknown {
 export function benignEvent(type: string): unknown {
   return { type };
 }
+
+export interface ContextMessageLike {
+  role: string;
+  customType?: string;
+  content: unknown;
+}
+
+/**
+ * context event fixture: OMP dispatches `{ type: "context", messages }` before
+ * each provider call (pi-coding-agent 18.10.4 `ContextEvent`). Only the fields
+ * cache-watch reads are modeled: the message list with role/customType.
+ */
+export function contextEvent(messages: ContextMessageLike[]): unknown {
+  return { type: 'context', messages };
+}
+
+/** A context contribution injected by a source extension (role "custom"). */
+export function injectedContextMessage(source: string): ContextMessageLike {
+  return { role: 'custom', customType: source, content: `context from ${source}` };
+}

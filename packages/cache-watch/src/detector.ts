@@ -27,10 +27,29 @@ export interface DivergencePoint {
   messageIndex: number;
 }
 
+/**
+ * Injection ledger entry (CONTEXT.md "Injection event"): a context
+ * contribution recorded read-only between two provider requests, tagged with
+ * its source extension name.
+ */
+export interface InjectionRecord {
+  requestNumber: number;
+  source: string;
+}
+
 export interface AlertSink {
   warn(message: string, context?: Record<string, unknown>): void;
   debug(message: string, context?: Record<string, unknown>): void;
 }
+
+/**
+ * Named cause carried in the warning (plan Task 2.2): precedence is
+ * compaction marker, then nearest upstream injection, then "none recorded".
+ */
+export type CollapseCause =
+  | { kind: 'injection'; source: string; request: number }
+  | { kind: 'compaction'; benignKind: string; request: number }
+  | { kind: 'none' };
 
 interface ResponseRecord {
   cacheRead: number;
@@ -86,6 +105,17 @@ function extractMessages(payload: unknown): unknown[] | null {
 }
 
 /**
+ * Source name of an injected context message: custom-role messages are the
+ * AgentMessage carrier extensions inject, identified by `customType`.
+ */
+function customTypeOf(message: unknown): string | null {
+  if (typeof message !== 'object' || message === null) return null;
+  if (!('role' in message) || message.role !== 'custom') return null;
+  if (!('customType' in message)) return null;
+  return typeof message.customType === 'string' ? message.customType : null;
+}
+
+/**
  * Per-session rolling state machine. Cold sessions (< BASELINE_MIN_RESPONSES)
  * have no frozen baseline and never alert. A benign reset suppresses alerting
  * (annotating instead) until a recovery re-arms detection.
@@ -98,6 +128,8 @@ export class CacheWatchDetector {
   private alertActive = false;
   private benignSuppressed = false;
   private windowStart = 0;
+  private readonly injections: InjectionRecord[] = [];
+  private contextMessageHashes: Set<string> | null = null;
   private requestCount = 0;
   private previousMessageHashes: string[] | null = null;
   private lastDivergence: DivergencePoint | null = null;
@@ -131,14 +163,19 @@ export class CacheWatchDetector {
             { sessionId: this.sessionId, baseline: this.baseline, rate },
           );
         } else {
+          const cause = this.resolveCause();
           const divergenceDetail = this.lastDivergence
             ? `; divergence at request ${this.lastDivergence.request} @ message index ${this.lastDivergence.messageIndex}`
             : '';
+          const causeDetail =
+            cause !== null && cause.kind === 'injection'
+              ? `; cause: nearest upstream injection from source "${cause.source}"`
+              : '';
           this.sink.warn(
             `cache-watch: prompt-cache collapse in session "${this.sessionId}": ` +
               `rolling ${WINDOW_SIZE}-response cache-read rate ${pct(rate)} is below the ` +
               `${pct(ABSOLUTE_FLOOR)} floor and more than ${pct(RELATIVE_MARGIN)} below ` +
-              `baseline ${pct(this.baseline)}${divergenceDetail}`,
+              `baseline ${pct(this.baseline)}${divergenceDetail}${causeDetail}`,
             {
               sessionId: this.sessionId,
               baseline: this.baseline,
@@ -146,6 +183,7 @@ export class CacheWatchDetector {
               floor: ABSOLUTE_FLOOR,
               margin: RELATIVE_MARGIN,
               divergence: this.lastDivergence,
+              cause,
             },
           );
         }
@@ -192,6 +230,50 @@ export class CacheWatchDetector {
     if (hashes.length < previous.length) {
       this.lastDivergence = { request: this.requestCount, messageIndex: hashes.length };
     }
+  }
+
+  /**
+   * Read-only injection ledger (ADR 0002): the context event fires before
+   * each provider call with the assembled message list. A custom-role
+   * message that was not in the previous snapshot — the carrier extensions
+   * inject, identified by `customType` — is recorded as an injection
+   * attributed to the upcoming request. Messages are hashed as received and
+   * never mutated or suppressed.
+   */
+  recordContextMessages(messages: unknown): void {
+    if (!Array.isArray(messages)) return;
+    const hashes = messages.map(message =>
+      createHash('sha256').update(stableStringify(message)).digest('hex'),
+    );
+    const previous = this.contextMessageHashes;
+    this.contextMessageHashes = new Set(hashes);
+    if (previous === null) return;
+    for (let index = 0; index < messages.length; index++) {
+      const source = customTypeOf(messages[index]);
+      if (source === null || previous.has(hashes[index]!)) continue;
+      this.injections.push({ requestNumber: this.requestCount + 1, source });
+    }
+  }
+
+  /**
+   * Cause lookup: the nearest upstream injection is the ledger entry with the
+   * greatest requestNumber at or before the divergence request; ties go to
+   * the most recently recorded entry. No divergence or no upstream entry
+   * means no named cause.
+   */
+  private resolveCause(): CollapseCause | null {
+    const divergence = this.lastDivergence;
+    if (divergence === null) return null;
+    let nearest: InjectionRecord | null = null;
+    for (const injection of this.injections) {
+      if (injection.requestNumber > divergence.request) continue;
+      if (nearest === null || injection.requestNumber >= nearest.requestNumber) {
+        nearest = injection;
+      }
+    }
+    return nearest === null
+      ? null
+      : { kind: 'injection', source: nearest.source, request: nearest.requestNumber };
   }
 
   benignReset(kind: string): void {

@@ -12,7 +12,9 @@ import { CacheWatchDetector } from './detector.ts';
  * it there; `after_provider_response` stays registered as the response
  * boundary marker. `before_provider_request` supplies the provider wire
  * payload (`payload.messages`) for prefix fingerprinting; the handler returns
- * nothing, so the payload always passes through unchanged.
+ * nothing, so the payload always passes through unchanged. The `context`
+ * event supplies the per-call assembled message list for the read-only
+ * injection ledger (ADR 0002: recorded, never mutated or suppressed).
  */
 export default function cacheWatch(pi: ExtensionAPI): void {
   const detectors = new Map<string, CacheWatchDetector>();
@@ -31,6 +33,10 @@ export default function cacheWatch(pi: ExtensionAPI): void {
 
   pi.on('before_provider_request', (event, ctx) => {
     detectorFor(ctx).recordRequestPayload(event.payload);
+  });
+
+  pi.on('context', (event, ctx) => {
+    detectorFor(ctx).recordContextMessages(event.messages);
   });
 
   pi.on('assistant_message', (event, ctx) => {
