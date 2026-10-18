@@ -170,6 +170,10 @@ export class CacheWatchDetector {
   private configuredModel: string | null = null;
   /** Active fallback episode; null while the configured model is serving. */
   private fallbackEpisode: FallbackEpisode | null = null;
+  /** Last fallback target this session served through; survives benignReset
+   * so a post-compaction serving model equal to it is never adopted as the
+   * configured model. Cleared when a genuinely different model serves. */
+  private lastFallbackTarget: string | null = null;
 
   constructor(
     private readonly sessionId: string,
@@ -256,12 +260,34 @@ export class CacheWatchDetector {
   /**
    * Serving model from the finalized assistant_message (AssistantMessage.model,
    * pi-ai 18.10.4 types.d.ts). While an episode is active, the fallback target
-   * serving again keeps the episode and never becomes the configured model;
-   * any other model is what the session now resolves to.
+   * serving again keeps the episode and never becomes the configured model.
+   * Any other model means the configured model is serving again (or the
+   * session's resolution changed): the episode ends, re-arming alerting.
    */
   recordServingModel(model: string): void {
-    if (this.fallbackEpisode !== null && model === this.fallbackEpisode.to) return;
-    this.configuredModel = model;
+    // A model that has ever served as a fallback target is never adopted as
+    // the configured model — a compaction (benignReset) clears the episode
+    // while the fallback may still be serving, and adopting it here would
+    // poison the baseline (review finding). Bootstrap limit: a session
+    // restored mid-fallback sees its fallback as the first serving model and
+    // there is no event to contradict it; documented in CONTEXT.md.
+    if (this.fallbackEpisode === null) {
+      if (model !== this.lastFallbackTarget) {
+        this.configuredModel = model;
+        this.lastFallbackTarget = null;
+      }
+      return;
+    }
+    if (model === this.fallbackEpisode.to) return;
+    const target = this.fallbackEpisode.to;
+    this.fallbackEpisode = null;
+    this.lastFallbackTarget = target;
+    if (model !== target) this.configuredModel = model;
+    this.sink.debug(
+      `cache-watch: "${model}" is serving in session "${this.sessionId}" ` +
+        `(differs from fallback target "${target}"); fallback episode ended`,
+      { sessionId: this.sessionId, model, fallbackTarget: target },
+    );
   }
 
   /**
@@ -281,6 +307,7 @@ export class CacheWatchDetector {
       return;
     }
     this.fallbackEpisode = { from, to, reason };
+    this.lastFallbackTarget = to;
     if (this.configuredModel === null) this.configuredModel = from;
     const reasonDetail = reason === undefined ? '' : ` (reason: ${reason})`;
     this.sink.warn(
