@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   FakePi,
   assistantMessage,
+  benignEvent,
   fakeCtx,
   fakeUi,
   type FakeCtx,
@@ -54,5 +55,29 @@ describe('collapse banner recovery', () => {
     pi.emit(assistantMessage(HEALTHY_RATE), ctx);
     expect(ui.widgets.has(BANNER_KEY)).toBe(false);
     expect(ui.widgets.size).toBe(0);
+  });
+
+  it('ends the alert episode on session switch so a still-collapsed session can re-alert', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ui = fakeUi();
+    const ctx = fakeCtx('cache-watch-demo', { mode: 'tui', ui, agent: { kind: 'main' } });
+
+    driveToBanner(pi, ctx);
+    expect(ui.widgets.has(BANNER_KEY)).toBe(true);
+    expect(pi.warnings.length).toBe(1);
+
+    // The TUI wipes hook widgets on session switch (extension-ui-controller
+    // clearHookWidgets). The detector must end the episode — banner, alert
+    // latch, and suppression — or a switch back to this still-collapsed
+    // session stays silent forever: no recovery is possible while collapsed.
+    pi.emit(benignEvent('session_switch'), ctx);
+    expect(ui.widgets.has(BANNER_KEY)).toBe(false);
+
+    // Switched back; the collapse continues. The restarted window must
+    // re-establish and re-alert through the normal 3-evaluation latch.
+    for (let i = 0; i < 8; i++) pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
+    expect(pi.warnings.length).toBe(2);
+    expect(ui.widgets.has(BANNER_KEY)).toBe(true);
   });
 });

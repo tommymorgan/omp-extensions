@@ -344,6 +344,7 @@ export class CacheWatchDetector {
 
   benignReset(kind: string): void {
     this.belowStreak = 0;
+    this.recoveredStreak = 0;
     this.windowStart = this.responses.length;
     this.benignSuppressed = true;
     // The benign marker is kept for cause attribution: a later warning whose
@@ -353,6 +354,20 @@ export class CacheWatchDetector {
     // state must not carry a compaction-caused divergence into later alerts.
     this.previousMessageHashes = null;
     this.lastDivergence = null;
+    // A session switch is a display-context boundary: the TUI has already
+    // wiped hook widgets (extension-ui-controller clearHookWidgets), so the
+    // alert episode must end here — otherwise a switch back to a
+    // still-collapsed session stays silent forever, because recovery is
+    // impossible while collapsed. Compaction keeps its in-episode
+    // suppression; only the switch ends the episode.
+    if (kind === 'session_switch') {
+      this.alertActive = false;
+      this.benignSuppressed = false;
+      if (this.bannerUp) {
+        this.bannerUp = false;
+        this.sink.banner?.(null);
+      }
+    }
     this.sink.debug(`cache-watch: benign reset (${kind}) recorded for session "${this.sessionId}"`);
   }
 }
