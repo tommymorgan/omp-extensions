@@ -40,11 +40,11 @@ Scenario: Benign compaction reset does not alert
   When its rolling rate drops below both thresholds for 2 evaluations immediately after a session_compact event and then recovers above 85%
   Then no collapse warning is logged
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-collapse-alert.feature::Recovery re-arms detection
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Recovery re-arms detection
   Given a session that already logged a collapse warning and whose rolling rate recovered above 85% for 10 responses
   When a second collapse stays below both thresholds for 3 consecutive evaluations
