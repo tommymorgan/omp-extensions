@@ -99,6 +99,28 @@ export function assistantMessage(rate: number, prompt = 1000): unknown {
   return { type: 'assistant_message', message: { role: 'assistant', usage: usageWithRate(rate, prompt) } };
 }
 
+export function assistantMessageWithModel(rate: number, model: string, prompt = 1000): unknown {
+  return {
+    type: 'assistant_message',
+    message: { role: 'assistant', model, usage: usageWithRate(rate, prompt) },
+  };
+}
+
+/**
+ * retry_fallback_applied fixture (pi-coding-agent 18.10.4
+ * RetryFallbackAppliedEvent): only the fields cache-watch reads.
+ */
+export function retryFallbackApplied(from: string, to: string, reason?: string): unknown {
+  return reason === undefined
+    ? { type: 'retry_fallback_applied', from, to }
+    : { type: 'retry_fallback_applied', from, to, reason };
+}
+
+/** retry_fallback_succeeded fixture: only the model field cache-watch reads. */
+export function retryFallbackSucceeded(model: string): unknown {
+  return { type: 'retry_fallback_succeeded', model };
+}
+
 export function providerResponse(): unknown {
   return { type: 'after_provider_response', status: 200, headers: {}, requestId: null };
 }

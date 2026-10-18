@@ -73,17 +73,29 @@ export default function cacheWatch(pi: ExtensionAPI): void {
   });
 
   pi.on('assistant_message', (event, ctx) => {
+    const detector = detectorFor(ctx);
     const usage = event.message.usage;
-    detectorFor(ctx).recordResponse({
+    detector.recordResponse({
       input: usage.input,
       cacheRead: usage.cacheRead,
       cacheWrite: usage.cacheWrite,
     });
+    // Serving model (AssistantMessage.model, pi-ai 18.10.4 types.d.ts): drives
+    // the fallback episode lifecycle. Fixtures without a model are skipped.
+    const model = event.message.model;
+    if (typeof model === 'string' && model.length > 0) detector.recordServingModel(model);
   });
 
   pi.on('session_compact', (_event, ctx) => detectorFor(ctx).benignReset('session_compact'));
   pi.on('auto_compaction_start', (_event, ctx) => detectorFor(ctx).benignReset('auto_compaction_start'));
   pi.on('auto_compaction_end', (_event, ctx) => detectorFor(ctx).benignReset('auto_compaction_end'));
   pi.on('session_switch', (_event, ctx) => detectorFor(ctx).benignReset('session_switch'));
-  pi.on('retry_fallback_applied', (_event, ctx) => detectorFor(ctx).benignReset('retry_fallback_applied'));
+  // retry_fallback_* is NOT benign (ADR 0004 / CONTEXT.md): the applied event
+  // opens a fallback episode with its single warning; succeeded only annotates.
+  pi.on('retry_fallback_applied', (event, ctx) =>
+    detectorFor(ctx).recordFallbackApplied(event.from, event.to, event.reason),
+  );
+  pi.on('retry_fallback_succeeded', (event, ctx) =>
+    detectorFor(ctx).recordFallbackSucceeded(event.model),
+  );
 }

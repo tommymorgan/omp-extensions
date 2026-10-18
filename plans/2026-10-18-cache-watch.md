@@ -167,11 +167,11 @@ Scenario: Banner clears on recovery
 
 <!-- estimate: ~150 reviewable lines | feature-files: features/model-fallback-alert.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/model-fallback-alert.feature::Model fallback triggers a warning alert
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Model fallback triggers a warning alert
   Given a session whose first 30 requests were served by configured model "gpt-5.2"
   When a retry_fallback_applied event reports from "gpt-5.2" to "qwen3-coder-30b" with reason "rate limited: insufficient quota"

@@ -39,6 +39,17 @@ export interface InjectionRecord {
   source: string;
 }
 
+/**
+ * A fallback episode (CONTEXT.md / ADR 0004): opened by a
+ * retry_fallback_applied event (from → to, with reason) and ended when the
+ * configured model serves a request again. Exactly one warning per episode.
+ */
+export interface FallbackEpisode {
+  from: string;
+  to: string;
+  reason?: string;
+}
+
 export interface AlertSink {
   warn(message: string, context?: Record<string, unknown>): void;
   debug(message: string, context?: Record<string, unknown>): void;
@@ -155,6 +166,10 @@ export class CacheWatchDetector {
   private requestCount = 0;
   private previousMessageHashes: string[] | null = null;
   private lastDivergence: DivergencePoint | null = null;
+  /** Configured model (CONTEXT.md): what the session resolves to; never the fallback itself. */
+  private configuredModel: string | null = null;
+  /** Active fallback episode; null while the configured model is serving. */
+  private fallbackEpisode: FallbackEpisode | null = null;
 
   constructor(
     private readonly sessionId: string,
@@ -236,6 +251,56 @@ export class CacheWatchDetector {
       this.belowStreak = 0;
       this.recoveredStreak = 0;
     }
+  }
+
+  /**
+   * Serving model from the finalized assistant_message (AssistantMessage.model,
+   * pi-ai 18.10.4 types.d.ts). While an episode is active, the fallback target
+   * serving again keeps the episode and never becomes the configured model;
+   * any other model is what the session now resolves to.
+   */
+  recordServingModel(model: string): void {
+    if (this.fallbackEpisode !== null && model === this.fallbackEpisode.to) return;
+    this.configuredModel = model;
+  }
+
+  /**
+   * retry_fallback_applied (ADR 0004): the authoritative "configured model
+   * couldn't be used" moment. Opens a fallback episode and logs its single
+   * warning naming from, to, and the reason verbatim. While an episode is
+   * active, further applied events for the same target only annotate — the
+   * incident is a state, not an event-per-request. A different target is a
+   * new degradation: a new episode with its own warning.
+   */
+  recordFallbackApplied(from: string, to: string, reason?: string): void {
+    if (this.fallbackEpisode !== null && this.fallbackEpisode.to === to) {
+      this.sink.debug(
+        `cache-watch: fallback to "${to}" still active in session "${this.sessionId}"; no repeat warning`,
+        { sessionId: this.sessionId, from, to, reason },
+      );
+      return;
+    }
+    this.fallbackEpisode = { from, to, reason };
+    if (this.configuredModel === null) this.configuredModel = from;
+    const reasonDetail = reason === undefined ? '' : ` (reason: ${reason})`;
+    this.sink.warn(
+      `cache-watch: model fallback in session "${this.sessionId}": requests are served by ` +
+        `fallback model "${to}" instead of "${from}"${reasonDetail}`,
+      { sessionId: this.sessionId, from, to, reason },
+    );
+  }
+
+  /** retry_fallback_succeeded only annotates (ADR 0004): confirms the fallback landed; never alerts. */
+  recordFallbackSucceeded(model: string): void {
+    this.sink.debug(
+      `cache-watch: fallback request succeeded on "${model}" in session "${this.sessionId}"`,
+      { sessionId: this.sessionId, model },
+    );
+  }
+
+  /** Active fallback episode or null — the Task 4.2 banner seam (read-only copy). */
+  get activeFallbackEpisode(): FallbackEpisode | null {
+    return this.fallbackEpisode === null ? null : { ...this.fallbackEpisode };
   }
 
   /**
@@ -354,6 +419,9 @@ export class CacheWatchDetector {
     // state must not carry a compaction-caused divergence into later alerts.
     this.previousMessageHashes = null;
     this.lastDivergence = null;
+    // ADR 0004: fallback episode state resets on session switch/compaction
+    // like other rolling state; a later fallback opens a fresh episode.
+    this.fallbackEpisode = null;
     // A session switch is a display-context boundary: the TUI has already
     // wiped hook widgets (extension-ui-controller clearHookWidgets), so the
     // alert episode must end here — otherwise a switch back to a
