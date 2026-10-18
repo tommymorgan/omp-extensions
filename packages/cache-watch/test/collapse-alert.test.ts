@@ -14,9 +14,10 @@ describe('cache collapse alert', () => {
       pi.emit(assistantMessage(0.94), ctx);
     }
 
-    // Rolling 5-response rate falls below 70% and >15 points below 94% and
-    // stays there for 5 consecutive evaluations (8 low responses: 3 fill the
-    // window, then evaluations 1-5 trip the detector repeatedly).
+    // Rolling 5-response rate falls below 70% and >15 points below 94%.
+    // Window lag delays recognition: the first three low responses still
+    // evaluate at 0.868/0.796/0.724 (>= floor), so belowStreak reaches 3 on
+    // the 6th low response — the warning lands there, not on the 3rd.
     for (let i = 0; i < 8; i++) {
       pi.emit(providerResponse(), ctx);
       pi.emit(assistantMessage(0.58), ctx);

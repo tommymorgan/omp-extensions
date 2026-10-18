@@ -15,3 +15,8 @@ Feature: Cache collapse alert
     Given a session that already logged a collapse warning and whose rolling rate recovered above 85% for 10 responses
     When a second collapse stays below both thresholds for 3 consecutive evaluations
     Then a second collapse warning is logged
+
+  Scenario: Cold session does not alert
+    Given a session with only 4 recorded provider responses
+    When its rolling cache-read rate reads 55%
+    Then no collapse warning is logged because no baseline is established

@@ -50,11 +50,11 @@ Scenario: Recovery re-arms detection
   When a second collapse stays below both thresholds for 3 consecutive evaluations
   Then a second collapse warning is logged
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-collapse-alert.feature::Cold session does not alert
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Cold session does not alert
   Given a session with only 4 recorded provider responses
   When its rolling cache-read rate reads 55%
