@@ -1,0 +1,20 @@
+{
+  "name": "tommy-omp-cache-watch",
+  "version": "0.1.0",
+  "description": "Read-only prompt-cache collapse watcher for OMP sessions",
+  "type": "module",
+  "license": "UNLICENSED",
+  "files": ["src", "README.md"],
+  "omp": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "test": "bun test test"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "^18.10.4"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.10.4"
+  }
+}

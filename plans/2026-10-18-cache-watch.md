@@ -19,11 +19,11 @@
 
 <!-- estimate: ~280 reviewable lines | feature-files: features/cache-collapse-alert.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-collapse-alert.feature::Cache collapse triggers a warning alert
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Cache collapse triggers a warning alert
   Given a session "cache-watch-demo" with a baseline cache-read rate of 94% established over its first 20 provider responses
   When its rolling 5-response cache-read rate stays below 70% and more than 15 points below baseline for 3 consecutive evaluations with no compaction, switch, or retry event in between
