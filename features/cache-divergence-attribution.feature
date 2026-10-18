@@ -15,3 +15,8 @@ Feature: Cache divergence attribution
     Given the divergence point is request 43 of session "cache-watch-demo" and no context injection was recorded in the 10 requests before it
     When the collapse warning fires
     Then the warning states that no context injection was recorded before the divergence
+
+  Scenario: Compaction is named as the cause
+    Given the divergence point immediately follows a session_compact event and no context injection was recorded between them
+    When the collapse warning fires
+    Then the warning names the compaction as the likely cause instead of an injection

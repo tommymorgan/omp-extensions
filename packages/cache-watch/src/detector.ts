@@ -62,6 +62,18 @@ function rateOf(record: ResponseRecord): number {
   return denominator === 0 ? 1 : record.cacheRead / denominator;
 }
 
+/** Benign markers that represent compaction (cause precedence, plan 2.2). */
+const COMPACTION_KINDS: Record<string, true> = {
+  session_compact: true,
+  auto_compaction_start: true,
+  auto_compaction_end: true,
+};
+
+/** Divergence requests this close after a compaction marker still count as
+ * "immediately following" it (markers record at the last fingerprinted
+ * request, so the boundary spans marker+1 and marker+2). */
+const COMPACTION_LOOKBACK_REQUESTS = 2;
+
 function windowRate(window: ResponseRecord[]): number {
   let cacheRead = 0;
   let uncached = 0;
@@ -121,6 +133,7 @@ function customTypeOf(message: unknown): string | null {
  * (annotating instead) until a recovery re-arms detection.
  */
 export class CacheWatchDetector {
+  private readonly benignMarkers: { requestNumber: number; kind: string }[] = [];
   private readonly responses: ResponseRecord[] = [];
   private baseline: number | null = null;
   private belowStreak = 0;
@@ -170,7 +183,9 @@ export class CacheWatchDetector {
           const causeDetail =
             cause.kind === 'injection'
               ? `; cause: nearest upstream injection from source "${cause.source}"`
-              : `; cause: no context injection was recorded before the divergence`;
+              : cause.kind === 'compaction'
+                ? `; likely cause: compaction (${cause.benignKind} at request ${cause.request})`
+                : `; cause: no context injection was recorded before the divergence`;
           this.sink.warn(
             `cache-watch: prompt-cache collapse in session "${this.sessionId}": ` +
               `rolling ${WINDOW_SIZE}-response cache-read rate ${pct(rate)} is below the ` +
@@ -239,6 +254,13 @@ export class CacheWatchDetector {
    * inject, identified by `customType` — is recorded as an injection
    * attributed to the upcoming request. Messages are hashed as received and
    * never mutated or suppressed.
+   *
+   * Best-effort by platform shape, documented honestly: the context event
+   * fires per handler over the accumulated list, so an extension ordered
+   * after this one injects after this snapshot and is invisible here; and
+   * injections carried as system/user/assistant content changes (no custom
+   * message) are not nameable. Such divergences surface without a named
+   * cause rather than with a false one.
    */
   recordContextMessages(messages: unknown): void {
     if (!Array.isArray(messages)) return;
@@ -256,13 +278,32 @@ export class CacheWatchDetector {
   }
 
   /**
-   * Cause lookup: the nearest upstream injection is the ledger entry with the
-   * greatest requestNumber at or before the divergence request; ties go to
-   * the most recently recorded entry. No divergence or no upstream entry
+   * Cause lookup. Compaction and injection candidates are compared by
+   * recency; the change nearest the divergence wins.
+   *
+   * 1. compaction — a benign marker of a compaction kind whose boundary
+   *    window contains the divergence (the plan's "immediately follows"
+   *    Given). Markers record at the last fingerprinted request, so the
+   *    window allows divergence.request - marker.requestNumber in [0, 2].
+   *    Non-compaction markers never mask a compaction candidate.
+   * 2. nearest upstream injection — the ledger entry with the greatest
+   *    requestNumber at or before the divergence request; ties go to the
+   *    most recently recorded entry. An injection recorded after the
+   *    compaction marker outranks it.
+   * 3. otherwise "none recorded".
    */
   private resolveCause(): CollapseCause {
     const divergence = this.lastDivergence;
     if (divergence === null) return { kind: 'none' };
+    let compaction: { requestNumber: number; kind: string } | null = null;
+    for (const marker of this.benignMarkers) {
+      if (COMPACTION_KINDS[marker.kind] !== true) continue;
+      const delta = divergence.request - marker.requestNumber;
+      if (delta < 0 || delta > COMPACTION_LOOKBACK_REQUESTS) continue;
+      if (compaction === null || marker.requestNumber >= compaction.requestNumber) {
+        compaction = marker;
+      }
+    }
     let nearest: InjectionRecord | null = null;
     for (const injection of this.injections) {
       if (injection.requestNumber > divergence.request) continue;
@@ -270,15 +311,22 @@ export class CacheWatchDetector {
         nearest = injection;
       }
     }
-    return nearest === null
-      ? { kind: 'none' }
-      : { kind: 'injection', source: nearest.source, request: nearest.requestNumber };
+    if (nearest !== null && (compaction === null || nearest.requestNumber >= compaction.requestNumber)) {
+      return { kind: 'injection', source: nearest.source, request: nearest.requestNumber };
+    }
+    if (compaction !== null) {
+      return { kind: 'compaction', benignKind: compaction.kind, request: compaction.requestNumber };
+    }
+    return { kind: 'none' };
   }
 
   benignReset(kind: string): void {
     this.belowStreak = 0;
     this.windowStart = this.responses.length;
     this.benignSuppressed = true;
+    // The benign marker is kept for cause attribution: a later warning whose
+    // divergence still follows this marker names it as the likely cause.
+    this.benignMarkers.push({ requestNumber: this.requestCount, kind });
     // Compaction rewrites the message list for a benign reason; fingerprint
     // state must not carry a compaction-caused divergence into later alerts.
     this.previousMessageHashes = null;

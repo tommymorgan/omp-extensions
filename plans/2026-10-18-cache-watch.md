@@ -111,11 +111,11 @@ Scenario: Injection-free collapse reports none
   When the collapse warning fires
   Then the warning states that no context injection was recorded before the divergence
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-divergence-attribution.feature::Compaction is named as the cause
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Compaction is named as the cause
   Given the divergence point immediately follows a session_compact event and no context injection was recorded between them
   When the collapse warning fires

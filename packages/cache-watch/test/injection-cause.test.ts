@@ -3,6 +3,7 @@ import {
   FakePi,
   assistantMessage,
   beforeProviderRequest,
+  benignEvent,
   contextEvent,
   fakeCtx,
   injectedContextMessage,
@@ -94,5 +95,114 @@ describe('injection correlation and cause naming', () => {
     const warning = pi.warnings[0];
     expect(warning?.message).toContain('no context injection was recorded before the divergence');
     expect(warning?.context?.cause).toEqual({ kind: 'none' });
+  });
+
+  it('names the compaction as the likely cause when the divergence immediately follows it', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ctx = fakeCtx('cache-watch-demo');
+
+    // Requests 1-30: healthy baseline, stable prefix A.
+    for (let request = 1; request <= 30; request++) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(prefixMessages()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(HEALTHY_RATE), ctx);
+    }
+    // session_compact after response 30 (marker attributed to request 30);
+    // fingerprints are cleared, so request 31 re-baselines on the rewritten
+    // prefix B instead of diverging.
+    pi.emit(benignEvent('session_compact'), ctx);
+    const rewritten = (): RequestMessageLike[] =>
+      Array.from({ length: 10 }, (_, i) => ({ role: 'user', content: `rewritten ${i}` }));
+    // Request 31: rewritten prefix B (re-baseline), healthy.
+    pi.emit(contextEvent(contextMessages()), ctx);
+    pi.emit(beforeProviderRequest(rewritten()), ctx);
+    pi.emit(providerResponse(), ctx);
+    pi.emit(assistantMessage(HEALTHY_RATE), ctx);
+    // Request 32 onward: B diverges at index 2 while still inside the
+    // compaction boundary window — the plan's "immediately follows" Given.
+    const settled = (): RequestMessageLike[] =>
+      rewritten().map((message, i) =>
+        i === 2 ? { ...message, content: 'rewritten 2 (settled)' } : message,
+      );
+    // Healthy at 31-33 clears suppression (3 above-floor evaluations)...
+    for (const request of [32, 33]) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(settled()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(HEALTHY_RATE), ctx);
+    }
+    // ...then a genuine collapse warns with divergence at request 32.
+    for (let request = 34; request <= 40; request++) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(settled()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
+    }
+
+    expect(pi.warnings.length).toBe(1);
+    const warning = pi.warnings[0];
+    expect(warning?.message).toContain('divergence at request 32 @ message index 2');
+    expect(warning?.message).toContain('likely cause');
+    expect(warning?.message).toContain('session_compact');
+    expect(warning?.context?.cause).toEqual({
+      kind: 'compaction',
+      benignKind: 'session_compact',
+      request: 30,
+    });
+  });
+
+  it('does not let a stale compaction marker shadow a nearer injection', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ctx = fakeCtx('cache-watch-demo');
+
+    // Requests 1-30: healthy baseline, stable prefix.
+    for (let request = 1; request <= 30; request++) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(prefixMessages()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(HEALTHY_RATE), ctx);
+    }
+    // An old compaction marker...
+    pi.emit(benignEvent('session_compact'), ctx);
+    // ...suppressed collapse while the cache warms back up (31-36)...
+    for (let request = 31; request <= 36; request++) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(prefixMessages()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
+    }
+    // ...recovery re-arms (37-40)...
+    for (let request = 37; request <= 40; request++) {
+      pi.emit(contextEvent(contextMessages()), ctx);
+      pi.emit(beforeProviderRequest(prefixMessages()), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(HEALTHY_RATE), ctx);
+    }
+    // ...and a kizn-guidance injection lands right before request 41, which
+    // then genuinely diverges. The injection is the nearest upstream change;
+    // the compaction 11 requests back must not shadow it.
+    pi.emit(contextEvent(contextMessages('kizn-guidance')), ctx);
+    pi.emit(beforeProviderRequest(divergedAt(7)), ctx);
+    pi.emit(providerResponse(), ctx);
+    pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
+    for (let request = 42; request <= 46; request++) {
+      pi.emit(contextEvent(contextMessages('kizn-guidance')), ctx);
+      pi.emit(beforeProviderRequest(divergedAt(7)), ctx);
+      pi.emit(providerResponse(), ctx);
+      pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
+    }
+
+    expect(pi.warnings.length).toBe(1);
+    const warning = pi.warnings[0];
+    expect(warning?.message).toContain('kizn-guidance');
+    expect(warning?.message).not.toContain('session_compact');
+    expect(warning?.context?.cause).toEqual({
+      kind: 'injection',
+      source: 'kizn-guidance',
+      request: 41,
+    });
   });
 });
