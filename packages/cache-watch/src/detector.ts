@@ -59,6 +59,13 @@ export interface AlertSink {
    * recovery clears it. Optional so log-only sinks stay valid.
    */
   banner?(state: BannerState | null): void;
+  /**
+   * Fallback banner lifecycle (plan Task 4.2): fired with the episode when it
+   * opens (or switches target) and with null when the episode ends — the
+   * configured model serving again or a benign reset. Optional so log-only
+   * sinks stay valid.
+   */
+  fallbackBanner?(episode: FallbackEpisode | null): void;
 }
 
 /**
@@ -315,6 +322,8 @@ export class CacheWatchDetector {
         `fallback model "${to}" instead of "${from}"${reasonDetail}`,
       { sessionId: this.sessionId, from, to, reason },
     );
+    // Raise (or retarget) the banner with the episode: from → to (ADR 0004).
+    this.sink.fallbackBanner?.(this.activeFallbackEpisode);
   }
 
   /** retry_fallback_succeeded only annotates (ADR 0004): confirms the fallback landed; never alerts. */

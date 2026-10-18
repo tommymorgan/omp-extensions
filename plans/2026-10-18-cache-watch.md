@@ -196,11 +196,11 @@ Scenario: Restoring the configured model re-arms fallback alerting
 
 <!-- estimate: ~80 reviewable lines | feature-files: features/model-fallback-alert.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/model-fallback-alert.feature::Fallback alert shows a banner naming both models
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Fallback alert shows a banner naming both models
   Given session "cache-watch-demo" is running in a TUI with an active fallback episode from "gpt-5.2" to "qwen3-coder-30b"
   Then a red banner appears in that session naming both models

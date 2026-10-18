@@ -12,3 +12,8 @@ Feature: Model fallback alert
     And a later retry_fallback_applied event again reports from "gpt-5.2" to "qwen3-coder-30b"
     Then a new warning is logged
 
+  Scenario: Fallback alert shows a banner naming both models
+    Given session "cache-watch-demo" is running in a TUI with an active fallback episode from "gpt-5.2" to "qwen3-coder-30b"
+    Then a red banner appears in that session naming both models
+    And a TUI session without an active fallback episode shows no banner
+

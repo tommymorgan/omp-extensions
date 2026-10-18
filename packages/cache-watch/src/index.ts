@@ -1,6 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { CacheWatchDetector } from './detector.ts';
-import { bannerKey, formatBannerLines, type BannerState } from './banner.ts';
+import { CacheWatchDetector, type FallbackEpisode } from './detector.ts';
+import {
+  bannerKey,
+  fallbackBannerKey,
+  formatBannerLines,
+  formatFallbackBannerLines,
+  type BannerState,
+  type FgStyler,
+} from './banner.ts';
 
 /**
  * cache-watch: read-only prompt-cache collapse watcher. ADR 0002: registers
@@ -17,12 +24,15 @@ import { bannerKey, formatBannerLines, type BannerState } from './banner.ts';
  * event supplies the per-call assembled message list for the read-only
  * injection ledger (ADR 0002: recorded, never mutated or suppressed).
  *
- * Banner (plan Task 3.1): the detector raises/lowers banner state through the
- * sink, and it renders via `ctx.ui.setWidget` — a widget above the editor,
- * never a message in the request stream. Only interactive TUI sessions of the
- * agent the human is watching render it; headless modes (`ctx.mode !== "tui"`)
- * and subagent runtimes (`ctx.agent.kind === "sub"`) skip rendering — their
- * `setWidget` stubs are no-ops anyway (agent-session.ts / runner.ts).
+ * Banners (plan Tasks 3.1 and 4.2): the detector raises/lowers banner state
+ * through the sink, and it renders via `ctx.ui.setWidget` — a widget above
+ * the editor, never a message in the request stream. Only interactive TUI
+ * sessions of the agent the human is watching render it; headless modes
+ * (`ctx.mode !== "tui"`) and subagent runtimes (`ctx.agent.kind === "sub"`)
+ * skip rendering — their `setWidget` stubs are no-ops anyway (agent-session.ts
+ * / runner.ts). The collapse banner and the fallback banner use separate
+ * session-scoped widget keys (`bannerKey` / `fallbackBannerKey`) so a
+ * simultaneous collapse alert and fallback episode both stay visible.
  */
 
 /** The per-event context fields the banner render surface consumes. */
@@ -34,15 +44,18 @@ export default function cacheWatch(pi: ExtensionAPI): void {
   /** Latest event context per session; the banner renders on the session's own UI. */
   const surfaces = new Map<string, SessionSurfaceCtx>();
 
-  const renderBanner = (sessionId: string, state: BannerState | null): void => {
+  const renderWidget = (
+    sessionId: string,
+    key: string,
+    format: ((fg: FgStyler) => string[]) | null,
+  ): void => {
     const ctx = surfaces.get(sessionId);
     if (!ctx?.ui || ctx.mode !== 'tui' || ctx.agent?.kind === 'sub') return;
-    const key = bannerKey(sessionId);
-    if (state === null) {
+    if (format === null) {
       ctx.ui.setWidget(key, undefined);
       return;
     }
-    ctx.ui.setWidget(key, formatBannerLines(state, ctx.ui.theme.fg.bind(ctx.ui.theme)), {
+    ctx.ui.setWidget(key, format(ctx.ui.theme.fg.bind(ctx.ui.theme)), {
       placement: 'aboveEditor',
     });
   };
@@ -55,7 +68,14 @@ export default function cacheWatch(pi: ExtensionAPI): void {
       detector = new CacheWatchDetector(sessionId, {
         warn: (message, context) => pi.logger.warn(message, context),
         debug: (message, context) => pi.logger.debug(message, context),
-        banner: state => renderBanner(sessionId, state),
+        banner: state =>
+          renderWidget(sessionId, bannerKey(sessionId), state === null ? null : fg =>
+            formatBannerLines(state, fg),
+          ),
+        fallbackBanner: episode =>
+          renderWidget(sessionId, fallbackBannerKey(sessionId), episode === null ? null : fg =>
+            formatFallbackBannerLines(episode, fg),
+          ),
       });
       detectors.set(sessionId, detector);
     }
