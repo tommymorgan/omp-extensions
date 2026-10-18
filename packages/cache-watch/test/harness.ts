@@ -5,14 +5,52 @@ export interface UsageLike {
   cacheWrite: number;
   totalTokens: number;
 }
+export interface FakeTheme {
+  fg(color: 'error' | 'muted', text: string): string;
+}
+
+/** Recorded widget content: styled lines plus the placement it was given. */
+export interface FakeWidget {
+  lines: string[];
+  placement?: string;
+}
+
+/** Models the ExtensionUIContext surface cache-watch consumes (setWidget + theme). */
+export interface FakeUi {
+  theme: FakeTheme;
+  widgets: Map<string, FakeWidget>;
+  setWidget(key: string, content: string[] | undefined, options?: { placement?: string }): void;
+}
+
+export function fakeUi(): FakeUi {
+  return {
+    theme: {
+      fg: (color, text) =>
+        color === 'error' ? `\x1b[31m${text}\x1b[0m` : `\x1b[90m${text}\x1b[0m`,
+    },
+    widgets: new Map(),
+    setWidget(key, content, options) {
+      if (content === undefined) {
+        this.widgets.delete(key);
+        return;
+      }
+      this.widgets.set(key, { lines: content, placement: options?.placement });
+    },
+  };
+}
 
 export interface FakeCtx {
   sessionManager: { getSessionId(): string };
+  mode?: 'tui' | 'rpc' | 'json' | 'print';
+  agent?: { kind: 'main' | 'sub' };
+  ui?: FakeUi;
 }
-export function fakeCtx(sessionId: string): FakeCtx {
-  return { sessionManager: { getSessionId: () => sessionId } };
+export function fakeCtx(
+  sessionId: string,
+  overrides: Partial<Omit<FakeCtx, 'sessionManager'>> = {},
+): FakeCtx {
+  return { sessionManager: { getSessionId: () => sessionId }, ...overrides };
 }
-export type Handler = (event: unknown, ctx: FakeCtx) => unknown;
 
 export class FakePi {
   readonly handlers = new Map<string, Handler[]>();

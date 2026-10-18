@@ -134,11 +134,11 @@ Scenario: Compaction is named as the cause
 
 <!-- estimate: ~250 reviewable lines | feature-files: features/cache-banner.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/cache-banner.feature::Collapse shows a red banner in the affected session only
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Collapse shows a red banner in the affected session only
   Given session "cache-watch-demo" is running in a TUI and has an active collapse alert naming a 94%-to-58% drop caused by source "kizn-guidance"
   Then a red banner appears in that session's interface showing the drop and the source

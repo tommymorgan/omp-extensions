@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import type { BannerState } from './banner.ts';
+
 
 /**
  * Hybrid cache-collapse detector (ADR 0001). Thresholds are named constants
@@ -40,6 +42,12 @@ export interface InjectionRecord {
 export interface AlertSink {
   warn(message: string, context?: Record<string, unknown>): void;
   debug(message: string, context?: Record<string, unknown>): void;
+  /**
+   * Banner lifecycle output (plan Task 3.1): fired with the machine-readable
+   * state when a collapse warning raises the banner, and with null when
+   * recovery clears it. Optional so log-only sinks stay valid.
+   */
+  banner?(state: BannerState | null): void;
 }
 
 /**
@@ -84,14 +92,13 @@ function windowRate(window: ResponseRecord[]): number {
   const denominator = cacheRead + uncached;
   return denominator === 0 ? 1 : cacheRead / denominator;
 }
-
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-function pct(value: number): string {
+export function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
@@ -201,6 +208,12 @@ export class CacheWatchDetector {
               cause,
             },
           );
+          this.sink.banner?.({
+            sessionId: this.sessionId,
+            baseline: this.baseline,
+            rate,
+            cause,
+          });
         }
       }
     } else if (rate >= ABSOLUTE_FLOOR) {

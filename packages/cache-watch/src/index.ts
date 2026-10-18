@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
 import { CacheWatchDetector } from './detector.ts';
+import { bannerKey, formatBannerLines, type BannerState } from './banner.ts';
 
 /**
  * cache-watch: read-only prompt-cache collapse watcher. ADR 0002: registers
@@ -15,15 +16,47 @@ import { CacheWatchDetector } from './detector.ts';
  * nothing, so the payload always passes through unchanged. The `context`
  * event supplies the per-call assembled message list for the read-only
  * injection ledger (ADR 0002: recorded, never mutated or suppressed).
+ *
+ * Banner (plan Task 3.1): the detector raises/lowers banner state through the
+ * sink, and it renders via `ctx.ui.setWidget` — a widget above the editor,
+ * never a message in the request stream. Only interactive TUI sessions of the
+ * agent the human is watching render it; headless modes (`ctx.mode !== "tui"`)
+ * and subagent runtimes (`ctx.agent.kind === "sub"`) skip rendering — their
+ * `setWidget` stubs are no-ops anyway (agent-session.ts / runner.ts).
  */
+
+/** The per-event context fields the banner render surface consumes. */
+type SessionSurfaceCtx = Pick<ExtensionContext, 'sessionManager'> &
+  Partial<Pick<ExtensionContext, 'mode' | 'ui' | 'agent'>>;
+
 export default function cacheWatch(pi: ExtensionAPI): void {
   const detectors = new Map<string, CacheWatchDetector>();
+  /** Latest event context per session; the banner renders on the session's own UI. */
+  const surfaces = new Map<string, SessionSurfaceCtx>();
 
-  const detectorFor = (ctx: Pick<ExtensionContext, 'sessionManager'>): CacheWatchDetector => {
+  const renderBanner = (sessionId: string, state: BannerState | null): void => {
+    const ctx = surfaces.get(sessionId);
+    if (!ctx?.ui || ctx.mode !== 'tui' || ctx.agent?.kind === 'sub') return;
+    const key = bannerKey(sessionId);
+    if (state === null) {
+      ctx.ui.setWidget(key, undefined);
+      return;
+    }
+    ctx.ui.setWidget(key, formatBannerLines(state, ctx.ui.theme.fg.bind(ctx.ui.theme)), {
+      placement: 'aboveEditor',
+    });
+  };
+
+  const detectorFor = (ctx: SessionSurfaceCtx): CacheWatchDetector => {
     const sessionId = ctx.sessionManager.getSessionId();
+    surfaces.set(sessionId, ctx);
     let detector = detectors.get(sessionId);
     if (!detector) {
-      detector = new CacheWatchDetector(sessionId, pi.logger);
+      detector = new CacheWatchDetector(sessionId, {
+        warn: (message, context) => pi.logger.warn(message, context),
+        debug: (message, context) => pi.logger.debug(message, context),
+        banner: state => renderBanner(sessionId, state),
+      });
       detectors.set(sessionId, detector);
     }
     return detector;
