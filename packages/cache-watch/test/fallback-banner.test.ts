@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
   FakePi,
+  assistantMessage,
   assistantMessageWithModel,
+  benignEvent,
   fakeCtx,
   fakeUi,
   providerResponse,
@@ -55,5 +57,73 @@ describe('fallback banner', () => {
     pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'quota'), headlessCtx);
     expect(headlessUi.widgets.size).toBe(0);
     expect(pi.warnings.length).toBe(2);
+  });
+
+  it('clears the banner when the configured model is restored, without restarting', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ui = fakeUi();
+    const ctx = fakeCtx('cache-watch-demo', { mode: 'tui', ui, agent: { kind: 'main' } });
+
+    // Given: session "cache-watch-demo" is showing the fallback banner.
+    pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'rate limited: insufficient quota'), ctx);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(true);
+
+    // When: an assistant_message reports the configured model "gpt-5.2"
+    // serving again.
+    pi.emit(providerResponse(), ctx);
+    pi.emit(assistantMessageWithModel(0.94, 'gpt-5.2'), ctx);
+
+    // Then: the banner is removed without restarting the session.
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(false);
+  });
+
+  it('coexists with the collapse banner: both up at once, clearing one keeps the other', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ui = fakeUi();
+    const ctx = fakeCtx('cache-watch-demo', { mode: 'tui', ui, agent: { kind: 'main' } });
+
+    // Establish a baseline, then collapse the cache rate to raise the
+    // collapse banner while a fallback episode is also active.
+    for (let i = 0; i < 20; i++) pi.emit(assistantMessage(0.94), ctx);
+    for (let i = 0; i < 6; i++) pi.emit(assistantMessage(0.58), ctx);
+    pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'quota'), ctx);
+
+    expect(ui.widgets.has('cache-watch-banner:cache-watch-demo')).toBe(true);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(true);
+
+    // Restoring the configured model clears only the fallback banner.
+    pi.emit(providerResponse(), ctx);
+    pi.emit(assistantMessageWithModel(0.94, 'gpt-5.2'), ctx);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(false);
+    expect(ui.widgets.has('cache-watch-banner:cache-watch-demo')).toBe(true);
+  });
+
+  it('restores a downed banner on a same-target applied event without a repeat warning', () => {
+    const pi = new FakePi();
+    cacheWatch(pi as never);
+    const ui = fakeUi();
+    const ctx = fakeCtx('cache-watch-demo', { mode: 'tui', ui, agent: { kind: 'main' } });
+
+    pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'quota'), ctx);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(true);
+    expect(pi.warnings.length).toBe(1);
+
+    // A compaction clears the episode and its banner while the fallback
+    // keeps serving (benignReset path).
+    pi.emit(benignEvent('session_compact'), ctx);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(false);
+
+    // A retry re-reporting the same fallback re-raises the banner; the
+    // warning itself already fired for this degradation (fresh episode after
+    // the reset warns once more — 2 total here), and within the episode a
+    // further same-target event never re-warns.
+    pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'quota'), ctx);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(true);
+    expect(pi.warnings.length).toBe(2);
+    pi.emit(retryFallbackApplied('gpt-5.2', 'qwen3-coder-30b', 'quota'), ctx);
+    expect(pi.warnings.length).toBe(2);
+    expect(ui.widgets.has(FALLBACK_KEY)).toBe(true);
   });
 });

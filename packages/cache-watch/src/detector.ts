@@ -177,6 +177,8 @@ export class CacheWatchDetector {
   private configuredModel: string | null = null;
   /** Active fallback episode; null while the configured model is serving. */
   private fallbackEpisode: FallbackEpisode | null = null;
+  /** The fallback banner is currently raised; tracks episode open/close. */
+  private fallbackBannerUp = false;
   /** Last fallback target this session served through; survives benignReset
    * so a post-compaction serving model equal to it is never adopted as the
    * configured model. Cleared when a genuinely different model serves. */
@@ -290,6 +292,12 @@ export class CacheWatchDetector {
     this.fallbackEpisode = null;
     this.lastFallbackTarget = target;
     if (model !== target) this.configuredModel = model;
+    // The banner clears when the episode ends (plan Task 4.2), without
+    // restarting the session.
+    if (this.fallbackBannerUp) {
+      this.fallbackBannerUp = false;
+      this.sink.fallbackBanner?.(null);
+    }
     this.sink.debug(
       `cache-watch: "${model}" is serving in session "${this.sessionId}" ` +
         `(differs from fallback target "${target}"); fallback episode ended`,
@@ -311,6 +319,13 @@ export class CacheWatchDetector {
         `cache-watch: fallback to "${to}" still active in session "${this.sessionId}"; no repeat warning`,
         { sessionId: this.sessionId, from, to, reason },
       );
+      // A benignReset nulls the episode, so a persistent episode's banner
+      // should be up — but if it is somehow down (defensive), restore it
+      // without a repeat warning: the degradation is ongoing.
+      if (!this.fallbackBannerUp) {
+        this.fallbackBannerUp = true;
+        this.sink.fallbackBanner?.(this.activeFallbackEpisode);
+      }
       return;
     }
     this.fallbackEpisode = { from, to, reason };
@@ -322,7 +337,9 @@ export class CacheWatchDetector {
         `fallback model "${to}" instead of "${from}"${reasonDetail}`,
       { sessionId: this.sessionId, from, to, reason },
     );
-    // Raise (or retarget) the banner with the episode: from → to (ADR 0004).
+    // Raise (or retarget) the banner with the episode: from → to for its
+    // whole duration (ADR 0004); re-arms after a clear re-raise here.
+    this.fallbackBannerUp = true;
     this.sink.fallbackBanner?.(this.activeFallbackEpisode);
   }
 
@@ -458,6 +475,12 @@ export class CacheWatchDetector {
     // ADR 0004: fallback episode state resets on session switch/compaction
     // like other rolling state; a later fallback opens a fresh episode.
     this.fallbackEpisode = null;
+    // The episode ended, so its banner ends with it (symmetric with the
+    // raise on open); a later applied event re-raises it.
+    if (this.fallbackBannerUp) {
+      this.fallbackBannerUp = false;
+      this.sink.fallbackBanner?.(null);
+    }
     // A session switch is a display-context boundary: the TUI has already
     // wiped hook widgets (extension-ui-controller clearHookWidgets), so the
     // alert episode must end here — otherwise a switch back to a

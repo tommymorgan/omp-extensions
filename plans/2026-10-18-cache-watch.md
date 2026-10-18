@@ -206,11 +206,11 @@ Scenario: Fallback alert shows a banner naming both models
   Then a red banner appears in that session naming both models
   And a TUI session without an active fallback episode shows no banner
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: features/model-fallback-alert.feature::Fallback banner clears when the configured model is restored
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 Scenario: Fallback banner clears when the configured model is restored
   Given session "cache-watch-demo" is showing the fallback banner
   When an assistant_message reports the configured model "gpt-5.2" serving again
