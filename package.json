@@ -3,10 +3,9 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test packages/editor/test packages/kizn-guidance/test packages/cache-watch/test packages/eval-progress/test",
+    "test": "bun test packages/editor/test packages/kizn-guidance/test packages/cache-watch/test",
     "test:editor": "bun test packages/editor/test",
     "test:cache-watch": "bun test packages/cache-watch/test",
-    "test:eval-progress": "bun test packages/eval-progress/test",
     "test:kizn-guidance": "bun test packages/kizn-guidance/test"
   }
 }
