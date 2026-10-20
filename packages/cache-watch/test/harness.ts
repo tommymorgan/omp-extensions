@@ -52,8 +52,30 @@ export function fakeCtx(
   return { sessionManager: { getSessionId: () => sessionId }, ...overrides };
 }
 
+type Handler = (event: unknown, ctx: FakeCtx) => unknown;
+
+/** Shared extension bus: emits the original object synchronously and returns an unsubscribe. */
+export class FakeEventBus {
+  readonly listeners = new Map<string, Set<(data: unknown) => void>>();
+
+  on(channel: string, handler: (data: unknown) => void): () => void {
+    let listeners = this.listeners.get(channel);
+    if (!listeners) {
+      listeners = new Set();
+      this.listeners.set(channel, listeners);
+    }
+    listeners.add(handler);
+    return () => { listeners.delete(handler); };
+  }
+
+  emit(channel: string, data: unknown): void {
+    for (const handler of this.listeners.get(channel) ?? []) handler(data);
+  }
+}
+
 export class FakePi {
   readonly handlers = new Map<string, Handler[]>();
+  readonly events = new FakeEventBus();
   readonly warnings: { message: string; context?: Record<string, unknown> }[] = [];
   readonly debugs: { message: string; context?: Record<string, unknown> }[] = [];
 

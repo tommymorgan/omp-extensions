@@ -61,14 +61,15 @@ function driveSession(
 }
 
 describe('injection correlation and cause naming', () => {
-  it('names the nearest upstream injection source in the warning', () => {
+  it('names an observed contributor only when included at the changed wire prefix', () => {
     const pi = new FakePi();
     cacheWatch(pi as never);
 
     // Divergence at request 43; injections land between 10–11 and 42–43.
     driveSession(
       pi,
-      request => (request === TOTAL_REQUESTS ? divergedAt(7) : prefixMessages()),
+      request => (request === TOTAL_REQUESTS ? divergedAt(7).map((message, index) =>
+        index === 7 ? { ...message, content: 'context from kizn-guidance' } : message) : prefixMessages()),
       request =>
         request === 11
           ? contextMessages('earlier-guidance')
@@ -79,12 +80,12 @@ describe('injection correlation and cause naming', () => {
 
     expect(pi.warnings.length).toBe(1);
     const warning = pi.warnings[0];
-    expect(warning?.message).toContain('nearest upstream injection');
+    expect(warning?.message).toContain('correlated candidate');
     expect(warning?.message).toContain('"kizn-guidance"');
-    expect(warning?.context?.cause).toEqual({ kind: 'injection', source: 'kizn-guidance', request: 43 });
+    expect(warning?.context?.cause).toMatchObject({ kind: 'injection', source: 'kizn-guidance', request: 43 });
   });
 
-  it('states that no context injection was recorded before the divergence', () => {
+  it('reports no matching contributor when changed wire content has no observed source', () => {
     const pi = new FakePi();
     cacheWatch(pi as never);
 
@@ -93,8 +94,8 @@ describe('injection correlation and cause naming', () => {
 
     expect(pi.warnings.length).toBe(1);
     const warning = pi.warnings[0];
-    expect(warning?.message).toContain('no context injection was recorded before the divergence');
-    expect(warning?.context?.cause).toEqual({ kind: 'none' });
+    expect(warning?.message).toContain('no-matching-contributor');
+    expect(warning?.context?.cause).toEqual({ kind: 'none', reason: 'no-matching-contributor' });
   });
 
   it('names the compaction as the likely cause when the divergence immediately follows it', () => {
@@ -181,16 +182,17 @@ describe('injection correlation and cause naming', () => {
       pi.emit(providerResponse(), ctx);
       pi.emit(assistantMessage(HEALTHY_RATE), ctx);
     }
-    // ...and a kizn-guidance injection lands right before request 41, which
-    // then genuinely diverges. The injection is the nearest upstream change;
-    // the compaction 11 requests back must not shadow it.
+    // A named contributor lands right before request 41 and is included at
+    // the changed wire prefix; the old compaction must not shadow it.
+    const includedGuidance = () => divergedAt(7).map((message, index) =>
+      index === 7 ? { ...message, content: 'context from kizn-guidance' } : message);
     pi.emit(contextEvent(contextMessages('kizn-guidance')), ctx);
-    pi.emit(beforeProviderRequest(divergedAt(7)), ctx);
+    pi.emit(beforeProviderRequest(includedGuidance()), ctx);
     pi.emit(providerResponse(), ctx);
     pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
     for (let request = 42; request <= 46; request++) {
       pi.emit(contextEvent(contextMessages('kizn-guidance')), ctx);
-      pi.emit(beforeProviderRequest(divergedAt(7)), ctx);
+      pi.emit(beforeProviderRequest(includedGuidance()), ctx);
       pi.emit(providerResponse(), ctx);
       pi.emit(assistantMessage(COLLAPSED_RATE), ctx);
     }
@@ -199,7 +201,7 @@ describe('injection correlation and cause naming', () => {
     const warning = pi.warnings[0];
     expect(warning?.message).toContain('kizn-guidance');
     expect(warning?.message).not.toContain('session_compact');
-    expect(warning?.context?.cause).toEqual({
+    expect(warning?.context?.cause).toMatchObject({
       kind: 'injection',
       source: 'kizn-guidance',
       request: 41,

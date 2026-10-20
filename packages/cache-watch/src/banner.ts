@@ -54,19 +54,34 @@ export function formatFallbackBannerLines(episode: FallbackEpisode, fg: FgStyler
 export type FgStyler = (color: 'error' | 'muted', text: string) => string;
 
 /**
- * The banner's two lines: the drop (frozen baseline → rolling rate at alert
- * time), then the Task 2.2 attribution line (injection source / compaction /
- * none recorded). Thresholds live in detector.ts; formatting reuses its pct().
+ * Attribution is a correlation diagnostic, not an established cause.
+ * Thresholds live in detector.ts; formatting reuses its pct().
  */
 export function formatBannerLines(state: BannerState, fg: FgStyler): string[] {
-  const cause =
-    state.cause.kind === 'injection'
-      ? `injection "${state.cause.source}"`
-      : state.cause.kind === 'compaction'
-        ? `compaction (${state.cause.benignKind})`
-        : 'none recorded';
+  let attribution: string;
+  if (state.cause.kind === 'injection') {
+    attribution = `correlated candidate "${state.cause.source}"`;
+    if (state.cause.version !== undefined) attribution += ` (${state.cause.version})`;
+  } else if (state.cause.kind === 'compaction') {
+    attribution = `compaction (${state.cause.benignKind})`;
+  } else {
+    switch (state.cause.reason) {
+      case 'unsupported-payload':
+        attribution = 'unsupported payload — fingerprint coverage unavailable';
+        break;
+      case 'chained-input':
+        attribution = 'partial coverage — chained input is not a full history';
+        break;
+      case 'no-divergence':
+        attribution = 'no divergence observed';
+        break;
+      case 'no-matching-contributor':
+        attribution = 'no matching contributor at changed prefix';
+        break;
+    }
+  }
   return [
     fg('error', `⚠ cache-watch: prompt-cache collapse ${pct(state.baseline)} → ${pct(state.rate)}`),
-    fg('error', `  cause: ${cause}`),
+    fg('error', `  attribution: ${attribution}`),
   ];
 }

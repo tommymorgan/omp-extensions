@@ -27,6 +27,8 @@ export interface TokenUsage {
 export interface DivergencePoint {
   request: number;
   messageIndex: number;
+  /** Top-level instruction fields are not message-list indices. */
+  source?: 'system' | 'instructions';
 }
 
 /**
@@ -37,6 +39,9 @@ export interface DivergencePoint {
 export interface InjectionRecord {
   requestNumber: number;
   source: string;
+  content: string;
+  contentHash: string;
+  version?: string;
 }
 
 /**
@@ -68,14 +73,11 @@ export interface AlertSink {
   fallbackBanner?(episode: FallbackEpisode | null): void;
 }
 
-/**
- * Named cause carried in the warning (plan Task 2.2): precedence is
- * compaction marker, then nearest upstream injection, then "none recorded".
- */
+/** Candidates are correlated with changed wire content, not established causes. */
 export type CollapseCause =
-  | { kind: 'injection'; source: string; request: number }
+  | { kind: 'injection'; source: string; request: number; version?: string; contentHash?: string }
   | { kind: 'compaction'; benignKind: string; request: number }
-  | { kind: 'none' };
+  | { kind: 'none'; reason: 'unsupported-payload' | 'chained-input' | 'no-divergence' | 'no-matching-contributor' };
 
 interface ResponseRecord {
   cacheRead: number;
@@ -96,8 +98,8 @@ const COMPACTION_KINDS: Record<string, true> = {
 };
 
 /** Divergence requests this close after a compaction marker still count as
- * "immediately following" it (markers record at the last fingerprinted
- * request, so the boundary spans marker+1 and marker+2). */
+ * "immediately following" it (markers record at the last provider request
+ * boundary, so the boundary spans marker+1 and marker+2). */
 const COMPACTION_LOOKBACK_REQUESTS = 2;
 
 function windowRate(window: ResponseRecord[]): number {
@@ -134,11 +136,89 @@ function stableStringify(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
-/** Extracts the provider wire message list; null when the payload carries none. */
-function extractMessages(payload: unknown): unknown[] | null {
-  if (typeof payload !== 'object' || payload === null) return null;
-  if (!('messages' in payload)) return null;
-  return Array.isArray(payload.messages) ? payload.messages : null;
+type FingerprintCoverage = 'complete' | 'partial' | 'unsupported';
+type PrefixPart = { hash: string; text: string; messageIndex: number; source?: 'system' | 'instructions' };
+type RequestSnapshot = { coverage: FingerprintCoverage; parts: PrefixPart[] };
+const ATTRIBUTION_LOOKBACK_REQUESTS = 10;
+const MAX_ATTRIBUTION_OBSERVATIONS = 64;
+
+function hashOf(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/** Only text-bearing fields contribute to content matching; metadata is not inclusion. */
+function textOf(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(textOf).join('\n');
+  if (typeof value !== 'object' || value === null) return '';
+  if ('text' in value && typeof value.text === 'string') return value.text;
+  if ('content' in value) return textOf(value.content);
+  return '';
+}
+
+function isWireContent(value: unknown): boolean {
+  if (typeof value === 'string') return true;
+  return Array.isArray(value) && value.every(part =>
+    typeof part === 'object' && part !== null &&
+    'type' in part && typeof part.type === 'string' &&
+    (!['text', 'input_text', 'output_text'].includes(part.type) ||
+      ('text' in part && typeof part.text === 'string')));
+}
+
+function isWireItem(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  if ('role' in value && typeof value.role === 'string' && 'content' in value) {
+    return isWireContent(value.content);
+  }
+  // Responses tool calls/results and reasoning are typed input items, not messages.
+  if (!('type' in value)) return false;
+  switch (value.type) {
+    case 'function_call':
+      return 'call_id' in value && typeof value.call_id === 'string' &&
+        'name' in value && typeof value.name === 'string' &&
+        'arguments' in value && typeof value.arguments === 'string';
+    case 'function_call_output':
+      return 'call_id' in value && typeof value.call_id === 'string' &&
+        'output' in value && (typeof value.output === 'string' || isWireContent(value.output));
+    case 'reasoning':
+      return 'summary' in value && Array.isArray(value.summary);
+    case 'item_reference':
+      return 'id' in value && typeof value.id === 'string';
+    case 'compaction':
+      return 'encrypted_content' in value && typeof value.encrypted_content === 'string';
+    default:
+      return false;
+  }
+}
+
+function snapshotOf(payload: unknown): RequestSnapshot {
+  const unsupported: RequestSnapshot = { coverage: 'unsupported', parts: [] };
+  if (typeof payload !== 'object' || payload === null) return unsupported;
+  if ('previous_response_id' in payload && payload.previous_response_id != null) {
+    return { coverage: 'partial', parts: [] };
+  }
+  let messages: unknown[];
+  if ('messages' in payload) {
+    if (!Array.isArray(payload.messages) || !payload.messages.every(isWireItem)) return unsupported;
+    messages = payload.messages;
+  } else if ('input' in payload) {
+    if (typeof payload.input === 'string') messages = [{ role: 'user', content: payload.input }];
+    else if (Array.isArray(payload.input) && payload.input.every(isWireItem)) messages = payload.input;
+    else return unsupported;
+  } else return unsupported;
+  const parts: PrefixPart[] = [];
+  for (const source of ['system', 'instructions'] as const) {
+    const content = source === 'system' && 'system' in payload ? payload.system :
+      source === 'instructions' && 'instructions' in payload ? payload.instructions : null;
+    if (content != null && !isWireContent(content)) return unsupported;
+    // Fixed slots keep adding/removing instruction fields from shifting list indices.
+    parts.push({ hash: hashOf(stableStringify(content ?? null)), text: textOf(content), messageIndex: 0, source });
+  }
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex];
+    parts.push({ hash: hashOf(stableStringify(message)), text: textOf(message), messageIndex });
+  }
+  return { coverage: 'complete', parts };
 }
 
 /**
@@ -150,6 +230,13 @@ function customTypeOf(message: unknown): string | null {
   if (!('role' in message) || message.role !== 'custom') return null;
   if (!('customType' in message)) return null;
   return typeof message.customType === 'string' ? message.customType : null;
+}
+
+function contextVersionOf(message: unknown): string | undefined {
+  if (typeof message !== 'object' || message === null || !('details' in message)) return undefined;
+  const details = message.details;
+  if (typeof details !== 'object' || details === null || !('version' in details)) return undefined;
+  return typeof details.version === 'string' ? details.version : undefined;
 }
 
 /**
@@ -171,8 +258,10 @@ export class CacheWatchDetector {
   private readonly injections: InjectionRecord[] = [];
   private contextMessageHashes: Set<string> | null = null;
   private requestCount = 0;
-  private previousMessageHashes: string[] | null = null;
+  private previousParts: PrefixPart[] | null = null;
+  private fingerprintCoverage: FingerprintCoverage = 'unsupported';
   private lastDivergence: DivergencePoint | null = null;
+  private matchedContributor: InjectionRecord | null = null;
   /** Configured model (CONTEXT.md): what the session resolves to; never the fallback itself. */
   private configuredModel: string | null = null;
   /** Active fallback episode; null while the configured model is serving. */
@@ -215,14 +304,15 @@ export class CacheWatchDetector {
         } else {
           const cause = this.resolveCause();
           const divergenceDetail = this.lastDivergence
-            ? `; divergence at request ${this.lastDivergence.request} @ message index ${this.lastDivergence.messageIndex}`
+            ? `; divergence at request ${this.lastDivergence.request} @ ${this.lastDivergence.source === undefined
+              ? `message index ${this.lastDivergence.messageIndex}` : this.lastDivergence.source}`
             : '';
           const causeDetail =
             cause.kind === 'injection'
-              ? `; cause: nearest upstream injection from source "${cause.source}"`
+              ? `; correlated candidate: context contribution from source "${cause.source}"`
               : cause.kind === 'compaction'
                 ? `; likely cause: compaction (${cause.benignKind} at request ${cause.request})`
-                : `; cause: no context injection was recorded before the divergence`;
+                : `; attribution unavailable: ${cause.reason}`;
           this.sink.warn(
             `cache-watch: prompt-cache collapse in session "${this.sessionId}": ` +
               `rolling ${WINDOW_SIZE}-response cache-read rate ${pct(rate)} is below the ` +
@@ -235,6 +325,7 @@ export class CacheWatchDetector {
               floor: ABSOLUTE_FLOOR,
               margin: RELATIVE_MARGIN,
               divergence: this.lastDivergence,
+              fingerprintCoverage: this.fingerprintCoverage,
               cause,
             },
           );
@@ -363,44 +454,92 @@ export class CacheWatchDetector {
    * request; the first fingerprinted request has nothing to diverge from.
    */
   recordRequestPayload(payload: unknown): void {
-    const messages = extractMessages(payload);
-    if (messages === null) return;
     this.requestCount += 1;
-    const hashes = messages.map(message =>
-      createHash('sha256').update(stableStringify(message)).digest('hex'),
-    );
-    const previous = this.previousMessageHashes;
-    this.previousMessageHashes = hashes;
+    this.expireAttribution();
+    const snapshot = snapshotOf(payload);
+    this.fingerprintCoverage = snapshot.coverage;
+    const previous = this.previousParts;
+    this.previousParts = snapshot.coverage === 'complete' ? snapshot.parts : null;
+    if (snapshot.coverage !== 'complete') {
+      this.lastDivergence = null;
+      this.matchedContributor = null;
+      return;
+    }
     if (previous === null) return;
-    // Only a changed or truncated prefix invalidates the prompt cache.
-    // Appended messages (a longer list) preserve the predecessor prefix,
-    // so they are never a divergence point.
-    const shared = Math.min(previous.length, hashes.length);
+    const parts = snapshot.parts;
+    const shared = Math.min(previous.length, parts.length);
     for (let index = 0; index < shared; index++) {
-      if (previous[index] !== hashes[index]) {
-        this.lastDivergence = { request: this.requestCount, messageIndex: index };
+      if (previous[index]!.hash !== parts[index]!.hash || previous[index]!.source !== parts[index]!.source) {
+        this.recordDivergence(parts[index]!, previous[index]!);
         return;
       }
     }
-    if (hashes.length < previous.length) {
-      this.lastDivergence = { request: this.requestCount, messageIndex: hashes.length };
+    if (parts.length < previous.length) {
+      const removed = previous[parts.length]!;
+      this.recordDivergence({ ...removed, text: '' }, removed);
     }
   }
 
+  private recordDivergence(part: PrefixPart, previous: PrefixPart): void {
+    this.lastDivergence = {
+      request: this.requestCount,
+      messageIndex: part.messageIndex,
+      ...(part.source === undefined ? {} : { source: part.source }),
+    };
+    this.matchedContributor = null;
+    if (part.text === previous.text) return;
+    let changedOffset = 0;
+    while (changedOffset < part.text.length && changedOffset < previous.text.length &&
+      part.text[changedOffset] === previous.text[changedOffset]) changedOffset += 1;
+    for (const candidate of this.injections) {
+      const age = this.requestCount - candidate.requestNumber;
+      if (age < 0 || age > ATTRIBUTION_LOOKBACK_REQUESTS) continue;
+      const start = part.text.lastIndexOf(candidate.content, changedOffset);
+      if (start < 0 || changedOffset >= start + candidate.content.length) continue;
+      if (this.matchedContributor === null || candidate.requestNumber > this.matchedContributor.requestNumber ||
+        (candidate.requestNumber === this.matchedContributor.requestNumber &&
+          (candidate.version !== undefined || this.matchedContributor.version === undefined))) {
+        this.matchedContributor = candidate;
+      }
+    }
+  }
+
+  private expireAttribution(): void {
+    while (this.injections.length > 0 &&
+      this.requestCount - this.injections[0]!.requestNumber > ATTRIBUTION_LOOKBACK_REQUESTS) {
+      this.injections.shift();
+    }
+    while (this.benignMarkers.length > 0 &&
+      this.requestCount - this.benignMarkers[0]!.requestNumber > ATTRIBUTION_LOOKBACK_REQUESTS + COMPACTION_LOOKBACK_REQUESTS) {
+      this.benignMarkers.shift();
+    }
+    if (this.lastDivergence !== null &&
+      this.requestCount - this.lastDivergence.request > ATTRIBUTION_LOOKBACK_REQUESTS) {
+      this.lastDivergence = null;
+      this.matchedContributor = null;
+    }
+  }
+
+  /** Publication is a candidate only; a later wire snapshot must prove inclusion. */
+  recordPublication(source: string, content: string, version?: string): void {
+    if (content.length === 0) return;
+    const requestNumber = this.requestCount + 1;
+    for (let index = this.injections.length - 1; index >= 0; index--) {
+      const candidate = this.injections[index]!;
+      if (candidate.requestNumber !== requestNumber) break;
+      if (candidate.source === source && candidate.content === content && candidate.version === version) return;
+    }
+    if (this.injections.length >= MAX_ATTRIBUTION_OBSERVATIONS) this.injections.shift();
+    this.injections.push({
+      requestNumber,
+      source, content, contentHash: hashOf(content),
+      ...(version === undefined ? {} : { version }),
+    });
+  }
+
   /**
-   * Read-only injection ledger (ADR 0002): the context event fires before
-   * each provider call with the assembled message list. A custom-role
-   * message that was not in the previous snapshot — the carrier extensions
-   * inject, identified by `customType` — is recorded as an injection
-   * attributed to the upcoming request. Messages are hashed as received and
-   * never mutated or suppressed.
-   *
-   * Best-effort by platform shape, documented honestly: the context event
-   * fires per handler over the accumulated list, so an extension ordered
-   * after this one injects after this snapshot and is invisible here; and
-   * injections carried as system/user/assistant content changes (no custom
-   * message) are not nameable. Such divergences surface without a named
-   * cause rather than with a false one.
+   * Preserve ordinary context observations. Publication events cover contributors
+   * ordered after this context hook; neither observation alone proves wire inclusion.
    */
   recordContextMessages(messages: unknown): void {
     if (!Array.isArray(messages)) return;
@@ -413,28 +552,16 @@ export class CacheWatchDetector {
     for (let index = 0; index < messages.length; index++) {
       const source = customTypeOf(messages[index]);
       if (source === null || previous.has(hashes[index]!)) continue;
-      this.injections.push({ requestNumber: this.requestCount + 1, source });
+      this.recordPublication(source, textOf(messages[index]), contextVersionOf(messages[index]));
     }
   }
 
-  /**
-   * Cause lookup. Compaction and injection candidates are compared by
-   * recency; the change nearest the divergence wins.
-   *
-   * 1. compaction — a benign marker of a compaction kind whose boundary
-   *    window contains the divergence (the plan's "immediately follows"
-   *    Given). Markers record at the last fingerprinted request, so the
-   *    window allows divergence.request - marker.requestNumber in [0, 2].
-   *    Non-compaction markers never mask a compaction candidate.
-   * 2. nearest upstream injection — the ledger entry with the greatest
-   *    requestNumber at or before the divergence request; ties go to the
-   *    most recently recorded entry. An injection recorded after the
-   *    compaction marker outranks it.
-   * 3. otherwise "none recorded".
-   */
+  /** Compaction retains precedence unless a newer, wire-matched contributor exists. */
   private resolveCause(): CollapseCause {
     const divergence = this.lastDivergence;
-    if (divergence === null) return { kind: 'none' };
+    if (this.fingerprintCoverage === 'unsupported') return { kind: 'none', reason: 'unsupported-payload' };
+    if (this.fingerprintCoverage === 'partial') return { kind: 'none', reason: 'chained-input' };
+    if (divergence === null) return { kind: 'none', reason: 'no-divergence' };
     let compaction: { requestNumber: number; kind: string } | null = null;
     for (const marker of this.benignMarkers) {
       if (COMPACTION_KINDS[marker.kind] !== true) continue;
@@ -444,20 +571,18 @@ export class CacheWatchDetector {
         compaction = marker;
       }
     }
-    let nearest: InjectionRecord | null = null;
-    for (const injection of this.injections) {
-      if (injection.requestNumber > divergence.request) continue;
-      if (nearest === null || injection.requestNumber >= nearest.requestNumber) {
-        nearest = injection;
-      }
-    }
+    const nearest = this.matchedContributor;
     if (nearest !== null && (compaction === null || nearest.requestNumber >= compaction.requestNumber)) {
-      return { kind: 'injection', source: nearest.source, request: nearest.requestNumber };
+      return {
+        kind: 'injection', source: nearest.source, request: divergence.request,
+        contentHash: nearest.contentHash,
+        ...(nearest.version === undefined ? {} : { version: nearest.version }),
+      };
     }
     if (compaction !== null) {
       return { kind: 'compaction', benignKind: compaction.kind, request: compaction.requestNumber };
     }
-    return { kind: 'none' };
+    return { kind: 'none', reason: 'no-matching-contributor' };
   }
 
   benignReset(kind: string): void {
@@ -470,8 +595,12 @@ export class CacheWatchDetector {
     this.benignMarkers.push({ requestNumber: this.requestCount, kind });
     // Compaction rewrites the message list for a benign reason; fingerprint
     // state must not carry a compaction-caused divergence into later alerts.
-    this.previousMessageHashes = null;
+    this.previousParts = null;
+    this.fingerprintCoverage = 'unsupported';
     this.lastDivergence = null;
+    this.matchedContributor = null;
+    this.injections.length = 0;
+    this.contextMessageHashes = null;
     // ADR 0004: fallback episode state resets on session switch/compaction
     // like other rolling state; a later fallback opens a fresh episode.
     this.fallbackEpisode = null;

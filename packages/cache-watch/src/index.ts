@@ -19,10 +19,10 @@ import {
  * event (`message.usage`: input/cacheRead/cacheWrite), so usage capture reads
  * it there; `after_provider_response` stays registered as the response
  * boundary marker. `before_provider_request` supplies the provider wire
- * payload (`payload.messages`) for prefix fingerprinting; the handler returns
- * nothing, so the payload always passes through unchanged. The `context`
- * event supplies the per-call assembled message list for the read-only
- * injection ledger (ADR 0002: recorded, never mutated or suppressed).
+ * payload for prefix fingerprinting; the handler returns nothing, so the
+ * payload always passes through unchanged. Context observations and
+ * Trailboss publications are read-only contributor candidates, not proof
+ * that a contribution reached the outgoing provider prefix.
  *
  * Banners (plan Tasks 3.1 and 4.2): the detector raises/lowers banner state
  * through the sink, and it renders via `ctx.ui.setWidget` — a widget above
@@ -60,9 +60,7 @@ export default function cacheWatch(pi: ExtensionAPI): void {
     });
   };
 
-  const detectorFor = (ctx: SessionSurfaceCtx): CacheWatchDetector => {
-    const sessionId = ctx.sessionManager.getSessionId();
-    surfaces.set(sessionId, ctx);
+  const detectorForSession = (sessionId: string): CacheWatchDetector => {
     let detector = detectors.get(sessionId);
     if (!detector) {
       detector = new CacheWatchDetector(sessionId, {
@@ -81,6 +79,36 @@ export default function cacheWatch(pi: ExtensionAPI): void {
     }
     return detector;
   };
+
+  const detectorFor = (ctx: SessionSurfaceCtx): CacheWatchDetector => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    surfaces.set(sessionId, ctx);
+    return detectorForSession(sessionId);
+  };
+
+  const unsubscribePublication = pi.events.on('trailboss:context:publish', data => {
+    if (
+      !data || typeof data !== 'object' || Array.isArray(data) ||
+      !('sessionId' in data) || typeof data.sessionId !== 'string' || data.sessionId.length === 0 ||
+      !('source' in data) || typeof data.source !== 'string' || data.source.length === 0 ||
+      !('message' in data) || !data.message || typeof data.message !== 'object' ||
+      Array.isArray(data.message) || !('content' in data.message) ||
+      typeof data.message.content !== 'string'
+    ) return;
+    let version: string | undefined;
+    if ('details' in data.message && data.message.details !== undefined) {
+      const details = data.message.details;
+      if (!details || typeof details !== 'object' || Array.isArray(details)) return;
+      if ('version' in details && details.version !== undefined) {
+        if (typeof details.version !== 'string') return;
+        version = details.version;
+      }
+    }
+    // A publication may precede the first context event. Its session ID owns
+    // the detector, but only an actual extension context can supply its UI.
+    detectorForSession(data.sessionId).recordPublication(data.source, data.message.content, version);
+  });
+  pi.on('session_shutdown', () => { unsubscribePublication(); });
 
   pi.on('after_provider_response', () => {});
 

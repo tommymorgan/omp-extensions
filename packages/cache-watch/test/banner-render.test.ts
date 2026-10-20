@@ -39,7 +39,7 @@ function prefixMessages(): RequestMessageLike[] {
 /** Copy of the prefix whose message at `index` differs. */
 function divergedAt(index: number): RequestMessageLike[] {
   return prefixMessages().map((message, i) =>
-    i === index ? { ...message, content: `message ${i} (diverted)` } : message,
+    i === index ? { ...message, content: 'context from kizn-guidance' } : message,
   );
 }
 
@@ -86,6 +86,7 @@ describe('collapse banner render', () => {
     expect(text).toContain('94%');
     expect(text).toContain('58%');
     expect(text).toContain('kizn-guidance');
+    expect(text).toContain('correlated candidate');
     expect(banner!.lines.every(line => line.includes(RED))).toBe(true);
     expect(banner!.placement).toBe('aboveEditor');
     expect(ui.widgets.size).toBe(1);
