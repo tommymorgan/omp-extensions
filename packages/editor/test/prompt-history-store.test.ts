@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { PromptHistoryStore, RAW_PROMPT_ENTRY_TYPE } from "../src/store";
+import { PromptHistoryStore, RAW_PROMPT_ENTRY_TYPE } from "../src/prompt-history-store";
 
 const stores: PromptHistoryStore[] = [];
 const directories: string[] = [];

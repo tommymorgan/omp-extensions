@@ -47,6 +47,7 @@ export class UndoRedoEditor extends CustomEditor {
   private readonly undoStack: Snapshot[] = [];
   private readonly redoStack: Snapshot[] = [];
   private activeGroup: EditGroup | undefined;
+  #preservingUndoHistory = false;
 
   override handleInput(data: string, preserveCursor = false): void {
     if (matchesCtrlShiftKey(data, 'z')) {
@@ -100,10 +101,25 @@ export class UndoRedoEditor extends CustomEditor {
     this.activeGroup = undefined;
   }
 
-  override setText(text: string): void {
+  clearUndoHistory(): void {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.activeGroup = undefined;
+  }
+
+  preserveUndoHistory(action: () => void): void {
+    const preserving = this.#preservingUndoHistory;
+    this.#preservingUndoHistory = true;
+    this.breakEditGroup();
+    try {
+      action();
+    } finally {
+      this.#preservingUndoHistory = preserving;
+    }
+  }
+
+  override setText(text: string): void {
+    if (!this.#preservingUndoHistory) this.clearUndoHistory();
     super.setText(text);
   }
 

@@ -1,8 +1,8 @@
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import type { PromptHistoryStore } from "./store";
+import type { PromptHistoryStore } from "./prompt-history-store";
+import { HomeEndEditor } from "./home-end";
 
-type HistoryBackend = Parameters<CustomEditor["setHistoryStorage"]>[0];
+type HistoryBackend = Parameters<HomeEndEditor["setHistoryStorage"]>[0];
 type DraftSnapshot = {
 	text: string;
 	pastes: Map<number, string>;
@@ -12,7 +12,7 @@ type DraftSnapshot = {
 type LocalEntry = { prompt: string } | { draft: DraftSnapshot };
 
 /** Uses the native editor's navigation, keybindings, and draft restoration machinery. */
-export class ConversationHistoryEditor extends CustomEditor {
+export class ConversationHistoryEditor extends HomeEndEditor {
 	#globalStorage?: HistoryBackend;
 	#store?: PromptHistoryStore;
 	#sessionId?: string;
@@ -35,7 +35,10 @@ export class ConversationHistoryEditor extends CustomEditor {
 
 	configureHistory(sessionId: string, scope: "all" | "session", store: PromptHistoryStore): void {
 		if (this.#sessionId === sessionId && this.#scope === scope && this.#store === store) return;
-		if (this.#sessionId !== sessionId) this.#local = [];
+		if (this.#sessionId !== sessionId) {
+			this.#local = [];
+			this.clearUndoHistory();
+		}
 		this.#sessionId = sessionId;
 		this.#scope = scope;
 		this.#store = store;
@@ -142,8 +145,8 @@ export class ConversationHistoryEditor extends CustomEditor {
 		if (this.#globalStorage instanceof HistoryStorage && this.#sessionId && this.#store) {
 			this.#store.seedSession(this.#sessionId, this.#globalStorage.getRecent(100, { sessionId: this.#sessionId }));
 		}
-		const current = this.#local.some(entry => "draft" in entry) ? this.#capture() : undefined;
-		this.#silently(() => {
+		this.preserveUndoHistory(() => this.#silently(() => {
+			const current = this.#local.some(entry => "draft" in entry) ? this.#capture() : undefined;
 			this.#rebuilding = true;
 			try {
 				super.setHistoryStorage(this.#backend);
@@ -158,6 +161,6 @@ export class ConversationHistoryEditor extends CustomEditor {
 			} finally {
 				this.#rebuilding = false;
 			}
-		});
+		}));
 	}
 }

@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
-import { ConversationHistoryEditor } from "../src/editor";
-import { PromptHistoryStore } from "../src/store";
+import { ConversationHistoryEditor } from "../src/conversation-history-editor";
+import { PromptHistoryStore } from "../src/prompt-history-store";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";

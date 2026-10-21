@@ -1,6 +1,6 @@
 # Tommy's OMP extensions
 
-One source repository, independently installable packages. The first package is [the editor](packages/editor/README.md), which combines Home/End navigation and undo/redo.
+One source repository, independently installable packages. [The editor](packages/editor/README.md) combines conversation-scoped prompt recall, displayed-row Home/End navigation and undo/redo.
 
 ## Development
 
@@ -16,9 +16,8 @@ Run `/restart` in OMP after installing or changing the editor. Keep only one act
 
 ## Packages
 
-- `packages/editor`: `tommy-omp-editor`, with one `omp.extensions` entry point.
+- `packages/editor`: `tommy-omp-editor`, scoped prompt recall plus Home/End navigation and undo/redo in one editor registration. Keep this package enabled; `/history-scope session` selects current-conversation recall.
 - `packages/kizn-guidance`: `tommy-omp-kizn-guidance`, native authenticated Kizn instruction-change delivery to OMP model context, including idle wake. See its [activation requirements](packages/kizn-guidance/README.md).
 - `packages/cache-watch`: `tommy-omp-cache-watch`, read-only alerting on silent session degradation — prompt-cache collapse with provider-aware coverage and request-matched contributor candidates, plus model-fallback episodes and TUI banners. Attribution is correlation, not proof of cache-loss causation. See [CONTEXT.md](CONTEXT.md) and [docs/adr](docs/adr).
-- `packages/conversation-history`: `tommy-omp-conversation-history`, opt-in current-conversation prompt recall through `/history-scope`. This standalone editor does not compose with `packages/editor`; see its [commands and known limits](packages/conversation-history/README.md).
 
 Source: [tommymorgan/omp-extensions](https://github.com/tommymorgan/omp-extensions). No package has been published to npm. The editor remains `UNLICENSED`; public source availability does not grant a reuse license.

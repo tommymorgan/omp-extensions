@@ -3,8 +3,8 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { lookup, register } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
-import { ConversationHistoryEditor } from "./editor";
-import { PromptHistoryStore } from "./store";
+import { ConversationHistoryEditor } from "./conversation-history-editor";
+import { PromptHistoryStore } from "./prompt-history-store";
 
 type HistoryScope = "all" | "session";
 
@@ -17,7 +17,7 @@ export const historyScope =
 		default: "all",
 	});
 
-/** An independently loadable history implementation for the unmodified host. */
+/** Installs scoped recall and personal navigation in one editor instance. */
 export default async function conversationHistory(pi: ExtensionAPI): Promise<void> {
 	const directory = path.join(getAgentDir(), "conversation-history");
 	const configFile = path.join(directory, "config.json");
