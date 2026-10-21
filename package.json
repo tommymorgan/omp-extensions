@@ -3,9 +3,10 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test packages/editor/test packages/kizn-guidance/test packages/cache-watch/test",
+    "test": "bun test packages/editor/test packages/kizn-guidance/test packages/cache-watch/test packages/conversation-history/test",
     "test:editor": "bun test packages/editor/test",
     "test:cache-watch": "bun test packages/cache-watch/test",
-    "test:kizn-guidance": "bun test packages/kizn-guidance/test"
+    "test:kizn-guidance": "bun test packages/kizn-guidance/test",
+    "test:conversation-history": "bun test packages/conversation-history/test"
   }
 }
