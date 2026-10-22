@@ -34,27 +34,6 @@ function sample(label: string, ctx: ExtensionContext) {
     accountId,
     model: ctx.model?.id,
   });
-  if (process.env.METRICS_UNUSED !== "1") {
-    const statusGetter = Reflect.get(ctx.ui, "getStatus");
-    const statusBefore = fetches;
-    const statusCallsBefore = calls;
-    const read = (key: string): unknown =>
-      typeof statusGetter === "function" ? statusGetter.call(ctx.ui, key) ?? null : null;
-    const status = read("agent-mail");
-    for (let i = 0; i < 100; i++) read("agent-mail");
-    log({
-      label: "status-read",
-      source: label,
-      mode: ctx.mode,
-      supported: typeof statusGetter === "function",
-      status,
-      work: read("agent-mail-work"),
-      presence: read("status-api-presence"),
-      missing: read("absent-native-status"),
-      readFetches: fetches - statusBefore,
-      readCalls: calls - statusCallsBefore,
-    });
-  }
 }
 function stream(model: Model) {
   const events = new AssistantMessageEventStream();

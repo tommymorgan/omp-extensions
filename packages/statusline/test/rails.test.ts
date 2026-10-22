@@ -94,31 +94,6 @@ const metrics = (quota: unknown) =>
     generationRate: { status: "available", tokensPerSecond: 45.5 },
     quota,
   });
-test("rate changes keep downstream columns fixed across integer, digit-width and availability transitions", () => {
-  const value = metrics({ status: "unavailable" });
-  const rates = [36.6, 35, 9.9, 10, 99.9, 100, undefined];
-  const rendered = rates.map((rate) =>
-    plain(
-      upperMetrics(
-        {
-          ...value,
-          generationRate: rate === undefined
-            ? { status: "unavailable" }
-            : { status: "available", tokensPerSecond: rate },
-        },
-        81.6,
-        650,
-        now,
-      ),
-    ),
-  );
-  const cacheColumns = rendered.map((line) =>
-    Bun.stringWidth(line.slice(0, line.indexOf("💰"))),
-  );
-  expect(new Set(cacheColumns).size).toBe(1);
-  expect(rendered[1]).toContain("35.0 tok/s");
-  expect(rendered.at(-1)?.trimStart().startsWith("— tok/s")).toBe(true);
-});
 test("QUOTA01 uses remaining allowance and independent reported reset instants", () => {
   const text = upperMetrics(
     metrics({

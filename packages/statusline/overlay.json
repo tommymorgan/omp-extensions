@@ -1,5 +1,5 @@
 {
-  "composer": { "shape": "personal-native-statusline" },
+  "composer": { "shape": "borderless" },
   "statusLine": {
     "preset": "custom",
     "leftSegments": ["pi"],

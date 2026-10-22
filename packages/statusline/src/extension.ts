@@ -1,32 +1,14 @@
 import { hostname, homedir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getComposerStyle, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { resolveActiveRepoContextSync } from "@oh-my-pi/pi-coding-agent/utils/active-repo-context";
 import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
-import { metricsSchema, recentCache, upperMetricFields } from "./rails";
+import { metricsSchema, recentCache, upperMetrics } from "./rails";
 
 /** Explicit loading only: no package discovery registration or editor ownership. */
 export default function statusline(pi: ExtensionAPI): void {
-  let nativeActivity = "";
-  pi.registerComposerShape({
-    label: "Personal native status line",
-    description: "Themed rails with native activity alongside session facts",
-    style: {
-      ...getComposerStyle("borderless"),
-      id: "personal-native-statusline",
-      statusAttachment: "top-border",
-      bottomBar: "none",
-      bottomBarGap: false,
-      renderTop(chrome) {
-        // The host appends a rule after its native brand/spinner/timer. Keep its ANSI intact.
-        nativeActivity = (chrome.topBorder?.content ?? "")
-          .replace(/─+(?=(?:\x1b\[[0-9;]*m|\s)*$)/u, "");
-        return undefined;
-      },
-    },
-  });
   let context: ExtensionContext | undefined;
   let stopTimer: NodeJS.Timeout | undefined;
   let requestRender: (() => void) | undefined;
@@ -78,35 +60,25 @@ export default function statusline(pi: ExtensionAPI): void {
     }
   }
   function start(ctx: ExtensionContext): void {
-    clearInterval(stopTimer);
-    if (installed && context) {
-      context.ui.setWidget("personal-statusline-upper", undefined);
-      context.ui.setWidget("personal-statusline-lower", undefined);
-    }
-    installed = false;
-    requestRender = undefined;
-    nativeActivity = "";
     context = ctx;
     pending = [];
     cacheIdentity = undefined;
     generation++;
     lastVcsRead = 0;
     if (!ctx.hasUI || ctx.mode !== "tui") return;
-    if (
-      typeof Reflect.get(ctx, "getStatusLineMetrics") !== "function" ||
-      typeof Reflect.get(ctx.ui, "getStatus") !== "function"
-    ) {
+    if (!("getStatusLineMetrics" in ctx) || typeof ctx.getStatusLineMetrics !== "function") {
       ctx.ui.notify(
-        "Status line requires the supported compaction/rate/quota metrics API and read-only status getter. Use the verified companion host; native OMP remains available.",
+        "Status line requires the supported compaction/rate/quota metrics API. Use the verified companion host; native OMP remains available.",
         "warning",
       );
       return;
     }
-    // Shapes are registered and disposed by the extension host; only keyed widgets reattach.
+    // Session transitions replace the composer's widget host; reattach the same keyed rails.
+    clearInterval(stopTimer);
     installed = true;
     ctx.ui.setWidget(
       "personal-statusline-upper",
-      (tui, theme) => {
+      (tui) => {
         requestRender = () => tui.requestRender();
         return {
           invalidate() {},
@@ -122,48 +94,17 @@ export default function statusline(pi: ExtensionAPI): void {
             const title = sanitizeDisplaySingleLine(
               active.sessionManager.getSessionName() ?? "Untitled session",
             );
-            const { rate, fields } = upperMetricFields(
-              snapshot.data, cache(active), active.getContextUsage()?.tokens, Date.now(),
-            );
-            const rateText = theme.fg("accent", rate.trimStart());
-            const rateWidth = Bun.stringWidth(rateText);
-            const availableWidth = Math.max(1, width);
-            const reserve = Math.max(11, rateWidth);
-            const metricRows: string[] = [];
-            let metricRow = "";
-            let metricWidth = Math.max(1, availableWidth - reserve - 2);
-            const separator = theme.fg("dim", "  ·  ");
-            for (const field of fields) {
-              const value = theme.fg(field.tone, field.text);
-              const joined = metricRow ? metricRow + separator + value : value;
-              if (Bun.stringWidth(joined) <= metricWidth) metricRow = joined;
-              else {
-                if (metricRow) {
-                  metricRows.push(metricRow);
-                  metricWidth = availableWidth;
-                }
-                const wrapped = wrapTextWithAnsi(value, metricWidth);
-                metricRows.push(...wrapped.slice(0, -1));
-                metricRow = wrapped.at(-1) ?? "";
-                if (metricRows.length) metricWidth = availableWidth;
-              }
-            }
-            metricRows.push(metricRow);
-            if (availableWidth >= reserve + 3) {
-              const first = metricRows[0] ?? "";
-              metricRows[0] = first +
-                " ".repeat(availableWidth - Bun.stringWidth(first) - rateWidth) + rateText;
-            } else {
-              const metricsText = fields.map((field) => theme.fg(field.tone, field.text))
-                .join(separator);
-              // Extremely narrow terminals still retain both facts and the complete rate.
-              metricRows.splice(0, metricRows.length,
-                ...wrapTextWithAnsi(metricsText, availableWidth),
-                ...wrapTextWithAnsi(rateText, availableWidth));
-            }
             return [
-              ...wrapTextWithAnsi(theme.bold(theme.fg("accent", title)), availableWidth),
-              ...metricRows,
+              ...wrapTextWithAnsi(title, Math.max(1, width)),
+              ...wrapTextWithAnsi(
+                upperMetrics(
+                  snapshot.data,
+                  cache(active),
+                  active.getContextUsage()?.tokens,
+                  Date.now(),
+                ),
+                Math.max(1, width),
+              ),
             ];
           },
         };
@@ -172,7 +113,7 @@ export default function statusline(pi: ExtensionAPI): void {
     );
     ctx.ui.setWidget(
       "personal-statusline-lower",
-      (_tui, theme) => ({
+      () => ({
         invalidate() {},
         render(width: number) {
           const active = context;
@@ -183,43 +124,12 @@ export default function statusline(pi: ExtensionAPI): void {
           const path =
             cwd === home ? "~" : cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
           const fields = [
-            `⌂ ${hostname()}`,
-            `◉ ${active.model?.name ?? active.model?.id ?? "model unavailable"}`,
-            `▰ ${path}`,
+            hostname(),
+            active.model?.name ?? active.model?.id ?? "model unavailable",
+            path,
           ];
-          if (repositoryCwd === cwd && branchLabel) fields.push(`⎇ ${branchLabel}`);
-          const separator = theme.fg("dim", "  ·  ");
-          const text = fields.map((field, index) =>
-            theme.fg(index === 1 ? "accent" : index === 3 ? "warning" : "muted",
-              sanitizeStatusText(field)),
-          ).join(separator);
-          const rows = wrapTextWithAnsi(
-            [nativeActivity, text].filter(Boolean).join(separator), Math.max(1, width),
-          );
-          const getter = Reflect.get(active.ui, "getStatus");
-          const status: unknown = typeof getter === "function"
-            ? getter.call(active.ui, "agent-mail") : undefined;
-          const identity = typeof status === "string"
-            ? /^mail ([^\s]+) \S+(?: .*)?$/u.exec(status)?.[1] : undefined;
-          if (identity && identity !== "unassigned") {
-            const mail = theme.fg("accent", `✉ ${sanitizeStatusText(identity)}`);
-            const last = rows.at(-1) ?? "";
-            const gap = width - Bun.stringWidth(last) - Bun.stringWidth(mail);
-            if (gap >= Bun.stringWidth(separator)) rows[rows.length - 1] = last + separator +
-              " ".repeat(gap - Bun.stringWidth(separator)) + mail;
-            else {
-              const leftWidth = width - Bun.stringWidth(mail) - Bun.stringWidth(separator);
-              if (leftWidth > 0) {
-                // Reflow the final facts row so ordinary IDs never occupy a mail-only row.
-                const tail = wrapTextWithAnsi(rows.pop() ?? "", leftWidth);
-                const final = tail.pop() ?? "";
-                rows.push(...tail, final + separator +
-                  " ".repeat(Math.max(0, width - Bun.stringWidth(final) -
-                    Bun.stringWidth(separator) - Bun.stringWidth(mail))) + mail);
-              } else rows.push(...wrapTextWithAnsi(mail, Math.max(1, width)));
-            }
-          }
-          return rows;
+          if (repositoryCwd === cwd && branchLabel) fields.push(branchLabel);
+          return wrapTextWithAnsi(fields.map(sanitizeStatusText).join("  ·  "), Math.max(1, width));
         },
       }),
       { placement: "belowEditor" },
@@ -255,12 +165,6 @@ export default function statusline(pi: ExtensionAPI): void {
   pi.on("message_update", refresh);
   pi.on("session_shutdown", () => {
     clearInterval(stopTimer);
-    if (installed && context) {
-      context.ui.setWidget("personal-statusline-upper", undefined);
-      context.ui.setWidget("personal-statusline-lower", undefined);
-    }
-    installed = false;
-    nativeActivity = "";
     generation++;
     context = undefined;
     pending = [];

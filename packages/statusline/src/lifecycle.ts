@@ -118,9 +118,7 @@ async function semanticGate(
   baseline: string,
   version: string,
   proof: string,
-  onProgress?: (stage: string) => void,
 ) {
-  onProgress?.("Checking compiled context-budget, generation-rate and account-quota semantics");
   await run(
     [
       "python3",
@@ -136,7 +134,6 @@ async function semanticGate(
     ],
     proof,
   );
-  onProgress?.("Checking the compiled status-line UI (80/96-column terminal checks)");
   await run(
     [
       "python3",
@@ -183,7 +180,6 @@ export async function updateCompanion(
   stage: (
     options: Parameters<typeof stageOfficialBaseline>[0],
   ) => Promise<z.infer<typeof stagedSchema>> = stageOfficialBaseline,
-  onProgress?: (stage: string) => void,
 ) {
   const options = optionsSchema.parse(input);
   await fs.mkdir(options.root, { recursive: true });
@@ -196,7 +192,6 @@ export async function updateCompanion(
   let gate = "official updater";
   let work: string | undefined;
   try {
-    onProgress?.("Checking the previous verified companion and selected stock executable");
     await readReady(options.root);
     const stock = await stockVersion(options.stock);
     if (stock.command.startsWith(`${await fs.realpath(options.root)}${path.sep}`))
@@ -208,11 +203,9 @@ export async function updateCompanion(
       throw new Error(
         "Selected stock must resolve as omp in its invocation directory; refusing an ambiguous update target",
       );
-    onProgress?.("Running the official OMP updater");
     await run([stock.command, "update"], process.cwd(), { ...process.env, PATH: updaterPath });
     const updated = await stockVersion(options.stock);
     gate = "exact source lookup / locked official compilation";
-    onProgress?.("Resolving exact official source, preparing locked dependencies and compiling the baseline");
     work = await fs.mkdtemp(path.join(options.root, "work-"));
     const baseline = stagedSchema.parse(
       await stage({ version: updated.version, stagingRoot: work, repository: options.repository }),
@@ -224,30 +217,26 @@ export async function updateCompanion(
     await fs.copyFile(baseline.binary, binary);
     await fs.chmod(binary, 0o755);
     gate = "official API semantic verification";
-    onProgress?.("Checking whether official OMP already provides the required metrics API");
     let patch = "none: semantically verified official API";
     const officialProof = path.join(work, "official-proof");
     await fs.mkdir(officialProof);
     try {
-      await semanticGate(binary, bundle, baseline.binary, updated.version, officialProof, onProgress);
+      await semanticGate(binary, bundle, baseline.binary, updated.version, officialProof);
     } catch (officialFailure) {
       await Bun.write(path.join(work, "official-api-rejection.txt"), String(officialFailure));
       gate = "minimal patch application";
-      onProgress?.("Official API is not equivalent; applying the minimal status-line API patch");
       const patchFile = path.join(bundle, "statusline/core.patch");
       await run(["git", "apply", "--check", patchFile], path.join(baseline.candidate, "source"));
       await run(["git", "apply", patchFile], path.join(baseline.candidate, "source"));
       patch = await checksum(patchFile);
       gate = "candidate compilation / worker smoke";
-      onProgress?.("Compiling the patched companion and checking bundled workers");
       await buildBaselineBinary(path.join(baseline.candidate, "source"), bundle, updated.version);
       gate = "status-line runtime smoke";
       const proof = path.join(work, "patched-proof");
       await fs.mkdir(proof);
-      await semanticGate(binary, bundle, baseline.binary, updated.version, proof, onProgress);
+      await semanticGate(binary, bundle, baseline.binary, updated.version, proof);
     }
     gate = "whole bundle immutability";
-    onProgress?.("Verifying workers and checksums, then sealing the complete companion bundle");
     const workers = await verifyBaselineBinary(binary, updated.version, work);
     const files = await inventory(bundle);
     const manifest = manifestSchema.parse({
@@ -265,7 +254,6 @@ export async function updateCompanion(
     const temporary = path.join(options.root, `ready-${randomUUID()}.json`);
     await durableJson(temporary, reference);
     gate = "atomic ready promotion";
-    onProgress?.("Activating the verified bundle for future launches; existing sessions stay unchanged");
     await fs.rename(temporary, path.join(options.root, "ready.json"));
     return { bundle, manifest, workers, proof: work, official: updated, provenance: baseline };
   } catch (cause) {

@@ -40,7 +40,7 @@ companion=Terminal('companion',['bun',str(package/'bin/omp-statusline'),*common,
 check('launcher exec retains original PID',observed['pid']==companion.proc.pid,observed)
 check('same saved title session model history',observed['session']==saved['session'] and observed['title']==saved['title'] and observed['model']=='model-one' and any(e.get('type')=='message' and e.get('message',{}).get('content')=='owned retained history' for e in observed['branch']),observed)
 check('ordinary existing editor retained',observed['editor']=='createEditor',observed)
-check('companion per-invocation overlay',observed['shape']=='personal-native-statusline' and observed['preset']=='custom',observed)
+check('companion per-invocation overlay',observed['shape']=='borderless' and observed['preset']=='custom',observed)
 check('selected statusline actually rendered',b'Allowance unavailable' in companion.raw,companion.raw[-5000:].decode(errors='replace'));companion.close()
 check('companion did not persist layout',config.read_bytes()==config_before)
 stock=Terminal('stock-after',[a.stock,*common,'--session',saved['file']]);stock.until('start');stock.send('/owned-probe');normal=stock.until('probe');stock.drain(1)

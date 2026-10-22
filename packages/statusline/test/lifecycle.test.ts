@@ -88,47 +88,6 @@ test("concurrent updater cannot replace an active owner's lock or ready referenc
   await fs.rmdir(path.join(options.root, "update.lock"));
 });
 
-test("CLI reports progress before a blocked official updater finishes", async () => {
-  const release = path.join(root, "release-progress-updater");
-  const blockedStock = await executable(
-    path.join(root, "progress-bin/omp"),
-    `#!/bin/sh\nif [ "$1" = --version ]; then echo omp/18.12.6; exit 0; fi\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\nexit 27\n`,
-  );
-  const child = Bun.spawn(
-    ["bun", path.resolve(import.meta.dir, "../bin/omp-statusline"), "update"],
-    {
-      env: {
-        ...process.env,
-        OMP_STATUSLINE_STOCK: blockedStock,
-        OMP_STATUSLINE_ROOT: path.join(root, "progress-state"),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const reader = child.stderr.getReader();
-  const reading = reader.read();
-  let progressBeforeExit = false;
-  try {
-    const first = await Promise.race([
-      reading,
-      Bun.sleep(2000).then(() => undefined),
-    ]);
-    progressBeforeExit = first !== undefined && !first.done && child.exitCode === null;
-  } finally {
-    await Bun.write(release, "release only the owned updater");
-    await reading;
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-    }
-    reader.releaseLock();
-    await Promise.all([new Response(child.stdout).text(), child.exited]);
-  }
-  expect(progressBeforeExit).toBe(true);
-  expect(child.exitCode).not.toBe(0);
-}, 10000);
-
 test.skipIf(!process.env.STATUSLINE_VERIFIED_BUNDLE)(
   "altered verified runtime bundle is rejected by the real launcher before execution",
   async () => {
