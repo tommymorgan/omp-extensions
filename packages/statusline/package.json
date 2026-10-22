@@ -2,6 +2,9 @@
   "name": "tommy-omp-statusline",
   "version": "0.0.0",
   "private": true,
+  "bin": {
+    "omp-statusline": "bin/omp-statusline"
+  },
   "type": "module",
   "scripts": {
     "test": "bun test test"

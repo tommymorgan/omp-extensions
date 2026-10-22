@@ -1,0 +1,1065 @@
+diff --git a/docs/extensions.md b/docs/extensions.md
+index 9bc7786fc4..ed5136f2c3 100644
+--- a/docs/extensions.md
++++ b/docs/extensions.md
+@@ -351,6 +351,8 @@ Handlers and tool `execute` receive `ctx` with:
+ - `models` (read-only model query — see below)
+ - `localProtocolOptions` (optional calling-session `local://` root mapping for external tool bridges)
+ - `getContextUsage()`
++- `getStatusLineMetrics()` returns synchronous read-only `StatusLineMetrics`: `compaction` is `{status: "enabled", thresholdTokens}` or `{status: "disabled" | "unavailable"}`; `generationRate` is `{status: "available", tokensPerSecond}` or `{status: "unavailable"}`. The trigger uses current model/settings and the central auto-compaction resolver; the rate is the session's native meter, including billed-output correction and tool-time hold, not output divided by wall time.
++- Its `quota` is `{status: "available", sevenDay?, fiveHour?}` only when the interactive host can select a snapshot for the current provider/account/model. Each reported window contains `remainingFraction` (zero is valid) and optional `resetsAt` (Unix milliseconds). Missing windows remain absent. Before collection, when the current scope has no matching window, and in RPC/headless/ACP hosts without a native quota cache it is `{status: "unavailable"}`. The native selector observes the session's latest shared reports, including `/usage` and successful saved-reset refreshes, rather than retaining a separate stale snapshot until its five-minute background TTL expires. Reading never fetches usage, starts a poller or alters settings. The public types `StatusLineMetrics`, `StatusLineQuota` and `StatusLineQuotaWindow` are exported with the extension types.
+ - `getAsyncJobSnapshot()` returns the current session's read-only async-job snapshot, or `null` when no session owns the context
+ - `compact(instructionsOrOptions?)`: accepts summary focus text or `CompactOptions`, including one-off `mode: "soft" | "remote" | "snapcompact"`, `onComplete`, `onError`, and `suppressContinuation`
+ - `isIdle()`, `hasPendingMessages()`, `abort()`
+@@ -878,6 +880,16 @@ before and performs no extra syscalls.
+ 
+ `ctx.ui` implements the `ExtensionUIContext` interface. Support differs by mode.
+ 
++`ctx.ui.getStatus(key)` synchronously reads the exact string last published with
++`ctx.ui.setStatus(key, text)` to the native TUI status line, including values
++published by another extension. Replacement is visible on the next read;
++`setStatus(key, undefined)` clears only that key. An empty string remains an
++empty string. Missing/cleared keys and hosts without native status storage
++(print, RPC and ACP) return `undefined`. RPC still forwards `setStatus` requests,
++but does not mirror remote status state locally. Reads do not mutate status,
++request renders, refresh state or perform external fetches. This is a keyed UI
++read, not a subscription; consumers can read during their normal render cycle.
++
+ ### Interactive mode (`extension-ui-controller.ts`)
+ 
+ Supported:
+@@ -1067,6 +1079,7 @@ Unsupported/no-op in RPC implementation:
+ - `onTerminalInput`
+ - `custom`; optional `askDialog` is absent
+ - `getEditorText` returns `""`; `getEditorComponent` returns `undefined`
++- `getStatus` returns `undefined` (no native status storage)
+ - `setFooter`, `setHeader`, `setEditorComponent`, `addAutocompleteProvider`
+ - `setWorkingMessage`
+ - theme switching/loading (`setTheme` returns failure)
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index 91190dca11..49994e968b 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -2,6 +2,15 @@
+ 
+ ## [Unreleased]
+ 
++### Added
++
++- Added read-only extension `ctx.getStatusLineMetrics()` for the host-resolved compaction trigger, native session generation meter and native active-scope cached quota, with explicit disabled/unavailable states and no additional usage fetches.
++- Added read-only `ctx.ui.getStatus(key)` for live, exact keyed native status text shared between extensions; absent keys and hosts without native status storage return `undefined`, without rendering or external fetches.
++
++### Fixed
++
++- Keep native status-line quota and extension metrics aligned with the session's latest usage reports after `/usage` refreshes and saved resets, without fetching on render or mixing provider/account/model scopes.
++
+ ## [18.12.6] - 2026-10-21
+ 
+ ### Added
+diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts
+index 7b9804375d..b89e0aa4e9 100644
+--- a/packages/coding-agent/src/extensibility/extensions/runner.ts
++++ b/packages/coding-agent/src/extensibility/extensions/runner.ts
+@@ -465,6 +465,7 @@ const noOpUIContext: ExtensionUIContext = {
+ 	notify: () => {},
+ 	onTerminalInput: () => () => {},
+ 	setStatus: () => {},
++	getStatus: () => undefined,
+ 	setWorkingMessage: () => {},
+ 	setWidget: () => {},
+ 	setFooter: () => {},
+@@ -522,6 +523,11 @@ export class ExtensionRunner {
+ 	#abortFn: () => void = () => {};
+ 	#hasPendingMessagesFn: () => boolean = () => false;
+ 	#getContextUsageFn: () => ContextUsage | undefined = () => undefined;
++	#getStatusLineMetricsFn: NonNullable<ExtensionContextActions["getStatusLineMetrics"]> = () => ({
++		compaction: { status: "unavailable" },
++		generationRate: { status: "unavailable" },
++		quota: { status: "unavailable" },
++	});
+ 	#compactFn: (instructionsOrOptions?: string | CompactOptions) => Promise<void> = async () => {};
+ 	#getSystemPromptFn: () => string[] = () => [];
+ 	#runEphemeralTurnFn?: ExtensionContextActions["runEphemeralTurn"];
+@@ -842,6 +848,13 @@ export class ExtensionRunner {
+ 		if (contextActions.getPendingPlanReview) this.#getPendingPlanReviewFn = contextActions.getPendingPlanReview;
+ 		if (contextActions.openPlanReview) this.#openPlanReviewFn = contextActions.openPlanReview;
+ 		this.#getContextUsageFn = contextActions.getContextUsage;
++		this.#getStatusLineMetricsFn =
++			contextActions.getStatusLineMetrics ??
++			(() => ({
++				compaction: { status: "unavailable" },
++				generationRate: { status: "unavailable" },
++				quota: { status: "unavailable" },
++			}));
+ 		this.#compactFn = contextActions.compact;
+ 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
+ 		this.#runEphemeralTurnFn = contextActions.runEphemeralTurn;
+@@ -1481,6 +1494,7 @@ export class ExtensionRunner {
+ 			ui: this.#uiContext,
+ 			mode: this.#mode,
+ 			getContextUsage: () => this.#getContextUsageFn(),
++			getStatusLineMetrics: () => this.#getStatusLineMetricsFn(),
+ 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
+ 			getAsyncJobSnapshot: () => this.#getAsyncJobSnapshotFn(),
+ 			hasUI: this.hasUI(),
+diff --git a/packages/coding-agent/src/extensibility/extensions/types.ts b/packages/coding-agent/src/extensibility/extensions/types.ts
+index c78dfd9fc2..58272cc503 100644
+--- a/packages/coding-agent/src/extensibility/extensions/types.ts
++++ b/packages/coding-agent/src/extensibility/extensions/types.ts
+@@ -36,7 +36,8 @@ import type {
+ 	ToolLoadMode,
+ } from "@oh-my-pi/pi-agent-core";
+ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
+-import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
++import type { ContextUsage, StatusLineMetrics } from "@oh-my-pi/pi-tui/status-line/types";
++export type { StatusLineMetrics, StatusLineQuota, StatusLineQuotaWindow } from "@oh-my-pi/pi-tui/status-line/types";
+ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+ import type {
+ 	Api,
+@@ -345,6 +346,13 @@ export interface ExtensionUIContext {
+ 	/** Set status text in the footer/status bar. Pass undefined to clear. */
+ 	setStatus(key: string, text: string | undefined): void;
+ 
++	/**
++	 * Read the current exact keyed status published with setStatus, including other extensions.
++	 * Returns undefined for absent/cleared keys or hosts without native status storage.
++	 * Read-only: does not request a render, refresh state, or fetch external data.
++	 */
++	getStatus(key: string): string | undefined;
++
+ 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
+ 	setWorkingMessage(message?: string): void;
+ 
+@@ -675,6 +683,8 @@ export interface ExtensionContext {
+ 	mode: ExtensionMode;
+ 	/** Get current context usage for the active model. */
+ 	getContextUsage(): ContextUsage | undefined;
++	/** Read host-resolved compaction, native generation rate and already-cached scoped quota. Never fetches. */
++	getStatusLineMetrics(): StatusLineMetrics;
+ 	/** Get a read-only snapshot of async jobs owned by this session. */
+ 	getAsyncJobSnapshot(): AsyncJobSnapshot | null;
+ 	/** Compact the session context (interactive mode shows UI). */
+@@ -2173,6 +2183,7 @@ export interface ExtensionContextActions {
+ 	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
+ 	openPlanReview?: () => Promise<boolean>;
+ 	getContextUsage: () => ContextUsage | undefined;
++	getStatusLineMetrics?: () => StatusLineMetrics;
+ 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
+ 	getSystemPrompt: () => string[];
+ 	runEphemeralTurn?: (options: EphemeralTurnOptions) => Promise<EphemeralTurnResult>;
+diff --git a/packages/coding-agent/src/modes/acp/acp-agent.ts b/packages/coding-agent/src/modes/acp/acp-agent.ts
+index 834930b02b..f8ad78e8ae 100644
+--- a/packages/coding-agent/src/modes/acp/acp-agent.ts
++++ b/packages/coding-agent/src/modes/acp/acp-agent.ts
+@@ -749,6 +749,7 @@ export function createAcpExtensionUiContext(
+ 		},
+ 		onTerminalInput: () => () => {},
+ 		setStatus: () => {},
++		getStatus: () => undefined,
+ 		setWorkingMessage: () => {},
+ 		setWidget: () => {},
+ 		setFooter: () => {},
+@@ -3015,6 +3016,7 @@ export class AcpAgent implements Agent {
+ 				hasPendingMessages: () => record.session.queuedMessageCount > 0,
+ 				shutdown: () => {},
+ 				getContextUsage: () => record.session.getContextUsage(),
++				getStatusLineMetrics: () => record.session.getStatusLineMetrics(),
+ 				getSystemPrompt: () => record.session.systemPrompt,
+ 				runEphemeralTurn: args => record.session.runEphemeralTurn(args),
+ 				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
+diff --git a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+index e05570fe7f..8976c185b2 100644
+--- a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
++++ b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+@@ -160,6 +160,7 @@ export class ExtensionUiController {
+ 			notify: (message, type) => this.showHookNotify(message, type),
+ 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
+ 			setStatus: (key, text) => this.setHookStatus(key, text),
++			getStatus: key => this.ctx.statusLine.getHookStatus(key),
+ 			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
+ 			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
+ 			setTitle: title => setExtensionTerminalTitle(title),
+@@ -252,6 +253,10 @@ export class ExtensionUiController {
+ 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
+ 			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
+ 			getContextUsage: () => this.ctx.session.getContextUsage(),
++			getStatusLineMetrics: () => ({
++				...this.ctx.session.getStatusLineMetrics(),
++				quota: this.ctx.statusLine.getQuotaSnapshot(this.ctx.session),
++			}),
+ 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
+ 			getSystemPrompt: () => this.ctx.session.systemPrompt,
+ 			runEphemeralTurn: args => this.ctx.session.runEphemeralTurn(args),
+@@ -483,6 +488,10 @@ export class ExtensionUiController {
+ 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
+ 			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
+ 			getContextUsage: () => this.ctx.session.getContextUsage(),
++			getStatusLineMetrics: () => ({
++				...this.ctx.session.getStatusLineMetrics(),
++				quota: this.ctx.statusLine.getQuotaSnapshot(this.ctx.session),
++			}),
+ 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
+ 			getSystemPrompt: () => this.ctx.session.systemPrompt,
+ 			runEphemeralTurn: args => this.ctx.session.runEphemeralTurn(args),
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index ef2d73db95..406219ab10 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -1506,6 +1506,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions
+ 			} as RpcExtensionUIRequest);
+ 		}
+ 
++		getStatus(_key: string): string | undefined {
++			// Status writes are forwarded; this host has no native status storage.
++			return undefined;
++		}
++
+ 		setWorkingMessage(_message?: string): void {
+ 			// Not supported in RPC mode
+ 		}
+diff --git a/packages/coding-agent/src/modes/runtime-init.ts b/packages/coding-agent/src/modes/runtime-init.ts
+index edf58307c8..e42e7f085c 100644
+--- a/packages/coding-agent/src/modes/runtime-init.ts
++++ b/packages/coding-agent/src/modes/runtime-init.ts
+@@ -145,6 +145,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
+ 			hasPendingMessages: () => session.queuedMessageCount > 0,
+ 			shutdown,
+ 			getContextUsage: () => session.getContextUsage(),
++			getStatusLineMetrics: () => session.getStatusLineMetrics(),
+ 			getSystemPrompt: () => session.systemPrompt,
+ 			runEphemeralTurn: args => session.runEphemeralTurn(args),
+ 			compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
+diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
+index 208af45823..58292c5bfc 100644
+--- a/packages/coding-agent/src/modes/status-line-host.ts
++++ b/packages/coding-agent/src/modes/status-line-host.ts
+@@ -30,7 +30,7 @@ import { cfgGoalStatusInFooter } from "../goals/settings";
+  * fixtures) still render; a live `AgentSession` satisfies it structurally.
+  */
+ export type StatusLineHostSession = StatusLineSession &
+-	Partial<Pick<AgentSession, "settings" | "modelRegistry" | "sessionId" | "fetchUsageReports">>;
++	Partial<Pick<AgentSession, "settings" | "modelRegistry" | "sessionId" | "fetchUsageReports" | "cachedUsageReports">>;
+ 
+ /** Application policy and runtime services consumed by the portable status renderer. */
+ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
+@@ -57,6 +57,7 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
+ 		session.modelRegistry?.authStorage?.oauth.identity(provider, session.sessionId),
+ 	canFetchUsageReports: session => typeof session.fetchUsageReports === "function",
+ 	fetchUsageReports: (session, signal) => session.fetchUsageReports?.(signal) ?? Promise.resolve(null),
++	cachedUsageReports: session => session.cachedUsageReports,
+ 	resolveActiveRepo: resolveActiveRepoContextSync,
+ 	lookupPullRequest: cwd =>
+ 		github.run(cwd, ["pr", "view", "--json", "number,url"], AbortSignal.timeout(GH_COMMAND_TIMEOUT_MS)),
+diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
+index cb90096e48..b1a4c65e9e 100644
+--- a/packages/coding-agent/src/session/agent-session.ts
++++ b/packages/coding-agent/src/session/agent-session.ts
+@@ -162,7 +162,8 @@ import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } fr
+ import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
+ import { ManagedTimers } from "../extensibility/extensions/managed-timers";
+ import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
+-import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
++import type { CompactOptions, ContextUsage, StatusLineMetrics } from "../extensibility/extensions/types";
++import { getSessionCompactionBudget } from "./context-usage-runtime";
+ import type { CustomCommandContext } from "../extensibility/custom-commands/types";
+ import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
+ import type { Skill, SkillWarning } from "../extensibility/skills";
+@@ -638,6 +639,7 @@ const noOpUIContext: ExtensionUIContext = {
+ 	notify: () => {},
+ 	onTerminalInput: () => () => {},
+ 	setStatus: () => {},
++	getStatus: () => undefined,
+ 	setWorkingMessage: () => {},
+ 	setWidget: () => {},
+ 	setTitle: () => {},
+@@ -8700,6 +8702,7 @@ export class AgentSession implements SettingsScope {
+ 			getPendingPlanReview: () => undefined,
+ 			openPlanReview: async () => false,
+ 			getContextUsage: () => this.getContextUsage(),
++			getStatusLineMetrics: () => this.getStatusLineMetrics(),
+ 			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
+ 			waitForIdle: () => this.waitForIdle(),
+ 			newSession: async options => {
+@@ -13515,6 +13518,16 @@ export class AgentSession implements SettingsScope {
+ 		return this.#stats.getContextUsage(options);
+ 	}
+ 
++	/** Read-only native metrics; quota requires the interactive host's selected cache. */
++	getStatusLineMetrics(): StatusLineMetrics {
++		const rate = this.tokenRate.rate();
++		return {
++			compaction: getSessionCompactionBudget(this.settings, this.model?.contextWindow ?? 0, this.model),
++			generationRate: rate === null ? { status: "unavailable" } : { status: "available", tokensPerSecond: rate },
++			quota: { status: "unavailable" },
++		};
++	}
++
+ 	/**
+ 	 * Monotonic counter that changes whenever the in-flight pending context
+ 	 * snapshot is set or cleared. Status-line context memoization keys on this so
+@@ -13602,11 +13615,19 @@ export class AgentSession implements SettingsScope {
+ 	 * credential. Never throws for business outcomes — inspect `code`.
+ 	 */
+ 	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
+-		return this.#modelRegistry.authStorage.resets.redeem({
++		const outcome = await this.#modelRegistry.authStorage.resets.redeem({
+ 			target,
+ 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+ 			signal,
+ 		});
++		if (outcome.ok) {
++			// Redemption invalidates the auth usage cache. Publish that refreshed
++			// snapshot to every session consumer before the reset UI repaints.
++			await this.fetchUsageReports(signal).catch(error => {
++				logger.warn("Failed to refresh usage after saved reset", { provider: target.provider, error: String(error) });
++			});
++		}
++		return outcome;
+ 	}
+ 
+ 	/**
+diff --git a/packages/coding-agent/src/session/context-usage-runtime.ts b/packages/coding-agent/src/session/context-usage-runtime.ts
+index bcb2b2bcd8..09108dd8e0 100644
+--- a/packages/coding-agent/src/session/context-usage-runtime.ts
++++ b/packages/coding-agent/src/session/context-usage-runtime.ts
+@@ -7,6 +7,7 @@ import {
+ 	type ContextBreakdown,
+ 	type ContextSavingsEstimate,
+ } from "@oh-my-pi/pi-tui/status-line/context-usage";
++import type { StatusLineMetrics } from "@oh-my-pi/pi-tui/status-line/types";
+ import type { ScopeLike } from "../config/registry";
+ import type { AgentSession } from "./agent-session";
+ import { resolveSpeculationMethod } from "./compaction-methods";
+@@ -17,6 +18,22 @@ import { resolveSpeculationLeadTokens } from "./speculation-lead";
+ import { cfgSkillful } from "./settings";
+ import { cfgSnapcompactShape, cfgSnapcompactSystemPrompt, cfgSnapcompactToolResults } from "./context-settings";
+ 
++/** The same model policy and trigger resolver used by automatic compaction. */
++export function getSessionCompactionBudget(
++	settings: ScopeLike,
++	contextWindow: number,
++	model?: Model | null,
++): StatusLineMetrics["compaction"] {
++	const configured: CompactionSettings = resolveModelCompactionSettings(settings, model);
++	if (!configured.enabled || configured.strategy === "off") return { status: "disabled" };
++	if (!Number.isFinite(contextWindow) || !(contextWindow > 0)) return { status: "unavailable" };
++	const thresholdTokens = resolveThresholdTokens(contextWindow, configured);
++	if (!Number.isFinite(thresholdTokens) || !(thresholdTokens > 0) || thresholdTokens > contextWindow) {
++		return { status: "unavailable" };
++	}
++	return { status: "enabled", thresholdTokens };
++}
++
+ /** Resolve session policy before handing pure boundary arithmetic to the UI. */
+ export function getSessionCompactionBoundaries(
+ 	settings: ScopeLike,
+diff --git a/packages/coding-agent/test/codex-auto-reset-integration.test.ts b/packages/coding-agent/test/codex-auto-reset-integration.test.ts
+index c39d88b920..e5e2c23757 100644
+--- a/packages/coding-agent/test/codex-auto-reset-integration.test.ts
++++ b/packages/coding-agent/test/codex-auto-reset-integration.test.ts
+@@ -16,6 +16,7 @@ import {
+ 	createCodexAutoRedeemCoordinator,
+ } from "@oh-my-pi/pi-coding-agent/session/codex-auto-reset";
+ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
++import { cfgCodexResetsAutoRedeem } from "@oh-my-pi/pi-coding-agent/session/settings";
+ import { TempDir } from "@oh-my-pi/pi-utils";
+ import type { AgentSideConnection, CreateElicitationRequest } from "@oh-my-pi/pi-utils/acp";
+ import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
+@@ -205,6 +206,35 @@ describe("Codex saved-reset consent without a prompt UI", () => {
+ 		return elicitations;
+ 	}
+ 
++	it("publishes fresh shared usage before a successful explicit saved reset returns", async () => {
++		const account: CodexAccount = {
++			accountId: "account-1",
++			credentialId: 1,
++			weeklyUsed: 1,
++			limitReached: true,
++			creditExpiresInMs: HOUR,
++		};
++		const { session } = buildSession({ accounts: [account] });
++		cfgCodexResetsAutoRedeem.set(session.settings, "no");
++		await session.fetchUsageReports();
++		expect(session.cachedUsageReports?.[0]?.limits[1]?.amount.usedFraction).toBe(1);
++		vi.spyOn(authStorage.resets, "redeem").mockImplementation(async () => {
++			account.weeklyUsed = 0;
++			account.limitReached = false;
++			return { ok: true, code: "reset", provider: "openai-codex", email: EMAIL, creditId: "credit" };
++		});
++		const outcome = await session.redeemResetCredit({
++			provider: "openai-codex",
++			credentialId: 1,
++			accountId: account.accountId,
++			email: EMAIL,
++			creditId: "credit",
++		});
++		expect(outcome.ok).toBe(true);
++		expect(session.cachedUsageReports?.[0]?.limits[1]?.amount.usedFraction).toBe(0);
++		expect(authStorage.usage.reports).toHaveBeenCalledTimes(2);
++	});
++
+ 	it("restores a blocked turn with a reset expiring within five minutes and continues", async () => {
+ 		const account = {
+ 			accountId: "acct-a",
+diff --git a/packages/coding-agent/test/context-consolidation.test.ts b/packages/coding-agent/test/context-consolidation.test.ts
+index 902f899524..f0589e0ef5 100644
+--- a/packages/coding-agent/test/context-consolidation.test.ts
++++ b/packages/coding-agent/test/context-consolidation.test.ts
+@@ -106,6 +106,43 @@ describe("Context usage consolidation", () => {
+ 		agent.replaceMessages(sessionContext.messages);
+ 	}
+ 
++	it("exposes the very same native session meter through streaming, billed correction and tool-time hold", async () => {
++		const tempDir = TempDir.createSync("@metrics-meter-");
++		const { session } = createSession(tempDir);
++		const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
++		try {
++			expect(session.getStatusLineMetrics().generationRate).toEqual({ status: "unavailable" });
++			session.tokenRate.begin(10_000);
++			for (let i = 1; i <= 12; i++) {
++				clock.mockReturnValue(10_000 + i * 500);
++				session.tokenRate.push(`visible chunk ${i} `.repeat(100));
++			}
++			const streaming = session.tokenRate.rate();
++			expect(streaming).not.toBeNull();
++			if (streaming === null) throw new Error("Native meter did not accumulate streaming evidence");
++			expect(session.getStatusLineMetrics().generationRate).toEqual({
++				status: "available",
++				tokensPerSecond: streaming,
++			});
++			session.tokenRate.end(5000);
++			const corrected = session.tokenRate.rate();
++			if (corrected === null) throw new Error("Native meter lost its completed reading");
++			expect(session.getStatusLineMetrics().generationRate).toEqual({
++				status: "available",
++				tokensPerSecond: corrected,
++			});
++			clock.mockReturnValue(60_000);
++			expect(session.tokenRate.rate()).toBe(corrected);
++			expect(session.getStatusLineMetrics().generationRate).toEqual({
++				status: "available",
++				tokensPerSecond: corrected,
++			});
++		} finally {
++			clock.mockRestore();
++			await tempDir.remove();
++		}
++	});
++
+ 	it("keeps branch-local anchors safe from sibling branches", async () => {
+ 		const tempDir = TempDir.createSync("@branch-local-");
+ 		const { session, sessionManager, agent } = createSession(tempDir);
+diff --git a/packages/coding-agent/test/extensions-runner.test.ts b/packages/coding-agent/test/extensions-runner.test.ts
+index 5948bc7744..fe436d354b 100644
+--- a/packages/coding-agent/test/extensions-runner.test.ts
++++ b/packages/coding-agent/test/extensions-runner.test.ts
+@@ -151,6 +151,11 @@ describe("ExtensionRunner", () => {
+ 		};
+ 
+ 		expect(runner.createContext().mode).toBe("print");
++		expect(runner.createContext().getStatusLineMetrics()).toEqual({
++			compaction: { status: "unavailable" },
++			generationRate: { status: "unavailable" },
++			quota: { status: "unavailable" },
++		});
+ 
+ 		runner.initialize(actions, contextActions, undefined, undefined, "rpc");
+ 		expect(runner.createContext().mode).toBe("rpc");
+@@ -160,6 +165,25 @@ describe("ExtensionRunner", () => {
+ 
+ 		runner.initialize(actions, contextActions, undefined, undefined, "tui");
+ 		expect(runner.createContext().mode).toBe("tui");
++		expect(runner.createContext().getStatusLineMetrics().quota.status).toBe("unavailable");
++	});
++
++	it("keeps native statuses unavailable in headless extension contexts even after writes", async () => {
++		const result = await loadTestExtensions();
++		const runner = new ExtensionRunner(
++			result.extensions,
++			result.runtime,
++			tempDir.path(),
++			sessionManager,
++			modelRegistry,
++		);
++		const producer = runner.createContext();
++		const consumer = runner.createContext();
++		producer.ui.setStatus("agent-mail", "mail AssignedAgent active");
++		producer.ui.setStatus("agent-mail-work", "work published");
++		expect(consumer.ui.getStatus("agent-mail")).toBeUndefined();
++		expect(consumer.ui.getStatus("agent-mail-work")).toBeUndefined();
++		expect(consumer.ui.getStatus("missing")).toBeUndefined();
+ 	});
+ 
+ 	it("uses required context actions when command actions are unavailable", async () => {
+@@ -2542,6 +2566,7 @@ describe("ExtensionRunner", () => {
+ 					notify: () => {},
+ 					onTerminalInput: () => () => {},
+ 					setStatus: () => {},
++					getStatus: () => undefined,
+ 					setWorkingMessage: () => {},
+ 					setWidget: () => {},
+ 					setFooter: () => {},
+diff --git a/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts b/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
+index 30c9187088..275a94ccb0 100644
+--- a/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
++++ b/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
+@@ -7,6 +7,8 @@ import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../sr
+ import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+ import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
++import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line/component";
++import type { StatusLineHost, StatusLineSession } from "@oh-my-pi/pi-tui/status-line/host";
+ import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
+ import { InputController } from "../../../src/modes/controllers/input-controller";
+ import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+@@ -22,7 +24,7 @@ beforeAll(async () => {
+ 	setThemeInstance(dark);
+ });
+ 
+-function makeHarness() {
++function makeHarness(statusLine?: StatusLineComponent) {
+ 	const editor = new CustomEditor(getEditorTheme());
+ 	const editorContainer = new Container();
+ 	editorContainer.addChild(editor);
+@@ -57,6 +59,7 @@ function makeHarness() {
+ 			terminal: { rows: 40, columns: 120 },
+ 		},
+ 		editorContainer,
++		statusLine,
+ 		session: {
+ 			agent,
+ 			extensionRunner: undefined,
+@@ -114,6 +117,38 @@ function makeHarness() {
+ 	};
+ }
+ 
++describe("ExtensionUiController shared status reads", () => {
++	let statusLine: StatusLineComponent | undefined;
++	afterEach(() => statusLine?.dispose());
++	it("reads live producer updates across separate UI contexts without requesting renders", async () => {
++		statusLine = new StatusLineComponent(
++			{} as StatusLineSession,
++			{ getSettings: () => ({}) } as StatusLineHost<StatusLineSession>,
++		);
++		const harness = makeHarness(statusLine);
++		const producer = await harness.init();
++		const consumer = await harness.init();
++		expect(producer).not.toBe(consumer);
++		expect(consumer.getStatus("agent-mail")).toBeUndefined();
++		producer.setStatus("agent-mail-work", "work published");
++		producer.setStatus("agent-mail", "\x1b[32mmail AssignedAgent active\x1b[0m");
++		const renders = harness.requestRender.mock.calls.length;
++		for (let i = 0; i < 100; i++) {
++			expect(consumer.getStatus("agent-mail")).toBe("\x1b[32mmail AssignedAgent active\x1b[0m");
++		}
++		expect(harness.requestRender.mock.calls.length).toBe(renders);
++		producer.setStatus("agent-mail", "mail ReplacementAgent idle");
++		expect(consumer.getStatus("agent-mail")).toBe("mail ReplacementAgent idle");
++		expect(consumer.getStatus("agent-mail-work")).toBe("work published");
++		producer.setStatus("agent-mail", "");
++		expect(consumer.getStatus("agent-mail")).toBe("");
++		producer.setStatus("agent-mail", undefined);
++		expect(consumer.getStatus("agent-mail")).toBeUndefined();
++		expect(consumer.getStatus("missing")).toBeUndefined();
++		expect(consumer.getStatus("agent-mail-work")).toBe("work published");
++	});
++});
++
+ describe("ExtensionUiController Ask dialog input", () => {
+ 	const questions: ExtensionAskDialogQuestion[] = [
+ 		{ id: "answer", question: "Choose an answer?", options: [{ label: "Default" }] },
+diff --git a/packages/coding-agent/test/status-line-metrics.test.ts b/packages/coding-agent/test/status-line-metrics.test.ts
+new file mode 100644
+index 0000000000..1c1f6bccf8
+--- /dev/null
++++ b/packages/coding-agent/test/status-line-metrics.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from "bun:test";
++import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
++import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
++import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { getSessionCompactionBudget } from "@oh-my-pi/pi-coding-agent/session/context-usage-runtime";
++import { resolveModelCompactionSettings } from "@oh-my-pi/pi-coding-agent/session/model-compaction-threshold";
++
++const model = createMockModel({ id: "metrics", provider: "openai", contextWindow: 500_000 });
++
++describe("read-only compaction metrics", () => {
++	it("reports the exact central trigger for global and model-specific policies", () => {
++		const variants = [
++			Settings.isolated({ "compaction.thresholdTokens": 300_000, "compaction.thresholdPercent": -1 }),
++			Settings.isolated({
++				"compaction.thresholdTokens": -1,
++				"compaction.thresholdPercent": 80,
++				"compaction.reserveTokens": 20_000,
++			}),
++			Settings.isolated({
++				"compaction.modelThresholds": { "openai/metrics": 300_000 },
++				"compaction.thresholdPercent": 80,
++				"compaction.reserveTokens": 20_000,
++			}),
++			Settings.isolated({ "compaction.modelThresholds": { "openai/metrics": "f230000" } }),
++		];
++		for (const settings of variants) {
++			const revision = settings.revision;
++			const trigger = resolveThresholdTokens(model.contextWindow, resolveModelCompactionSettings(settings, model));
++			for (let i = 0; i < 10; i++) {
++				expect(getSessionCompactionBudget(settings, model.contextWindow, model)).toEqual({
++					status: "enabled",
++					thresholdTokens: trigger,
++				});
++			}
++			expect(settings.revision).toBe(revision);
++		}
++	});
++
++	it("distinguishes off policy from unusable capacity without inventing a number", () => {
++		expect(getSessionCompactionBudget(Settings.isolated({ "compaction.enabled": false }), 500_000, model)).toEqual({
++			status: "disabled",
++		});
++		for (const capacity of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
++			expect(getSessionCompactionBudget(Settings.isolated(), capacity, model)).toEqual({ status: "unavailable" });
++		}
++	});
++});
+diff --git a/packages/coding-agent/test/status-line-usage-refresh.test.ts b/packages/coding-agent/test/status-line-usage-refresh.test.ts
+index 95f3b617c3..2980bf7d9e 100644
+--- a/packages/coding-agent/test/status-line-usage-refresh.test.ts
++++ b/packages/coding-agent/test/status-line-usage-refresh.test.ts
+@@ -173,6 +173,152 @@ describe("StatusLineComponent usage refresh", () => {
+ 		resetSettingsForTest();
+ 	});
+ 
++	it("exposes only the native selected quota cache and invalidates immediately on scope changes", async () => {
++		let accountId = "account-1";
++		let calls = 0;
++		const reset = Date.now() + 123_456;
++		const session = makeCodexSession(
++			async () => {
++				calls++;
++				return codexUsageReport({ sevenDayPercent: 59, sevenDayResetAt: reset }, accountId);
++			},
++			() => ({ accountId, email: "codex@example.com" }),
++		);
++		const component = new StatusLineComponent(session, statusLineHost);
++		try {
++			for (let i = 0; i < 10; i++) expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			expect(calls).toBe(0);
++			await refreshUsage(component);
++			expect(component.getQuotaSnapshot()).toEqual({
++				status: "available",
++				fiveHour: undefined,
++				sevenDay: { remainingFraction: 1 - 0.59, resetsAt: reset },
++			});
++			for (let i = 0; i < 10; i++) component.getQuotaSnapshot();
++			expect(calls).toBe(1);
++			accountId = "account-2";
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			await refreshUsage(component);
++			expect(component.getQuotaSnapshot().status).toBe("available");
++			session.state.model = { ...session.state.model!, id: "another-model" };
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			expect(calls).toBe(2);
++		} finally {
++			component.dispose();
++		}
++		expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++	});
++
++	it("shows a reset fetched by the usage dashboard immediately, without waiting for the native TTL", async () => {
++		let calls = 0;
++		const oldReset = Date.now() + (5 * 24 + 9) * 3_600_000;
++		const newReset = Date.now() + 7 * 24 * 3_600_000;
++		let next = codexUsageReport({ sevenDayPercent: 100, sevenDayResetAt: oldReset, savedResets: 1 });
++		let shared: AgentSession["cachedUsageReports"];
++		const session = makeCodexSession(async () => {
++			calls++;
++			shared = next as AgentSession["cachedUsageReports"];
++			return shared;
++		});
++		Object.defineProperty(session, "cachedUsageReports", { get: () => shared });
++		const component = new StatusLineComponent(session, statusLineHost);
++		component.updateSettings({ preset: "custom", leftSegments: ["usage"], rightSegments: [] });
++		try {
++			await refreshUsage(component);
++			expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 0, resetsAt: oldReset } });
++			expect(plain(component.getTopBorder(120).content)).toContain("7d 100%");
++			vi.advanceTimersByTime(60_000);
++			next = codexUsageReport({ sevenDayPercent: 0, sevenDayResetAt: newReset, savedResets: 0 });
++			// /usage and successful saved-reset redemption both refresh this shared session snapshot.
++			await session.fetchUsageReports();
++			// Exercise native render memoization before the extension accessor.
++			expect(plain(component.getTopBorder(120).content)).toContain("7d 0%");
++			for (let i = 0; i < 10; i++) {
++				expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 1, resetsAt: newReset } });
++				component.getTopBorder(120);
++			}
++			vi.advanceTimersByTime(0);
++			await flushMicrotasks();
++			expect(calls).toBe(2);
++		} finally {
++			component.dispose();
++		}
++	});
++
++	it("reselects shared reports by account and model without borrowing the preceding scope", () => {
++		let accountId = "account-1";
++		const reset = Date.now() + 100_000;
++		const reports = codexUsageReport({ sevenDayPercent: 0, sevenDayResetAt: reset }) as NonNullable<
++			AgentSession["cachedUsageReports"]
++		>;
++		reports[0]!.limits[0]!.scope.modelId = "model-1";
++		let calls = 0;
++		const session = makeCodexSession(
++			async () => {
++				calls++;
++				return reports;
++			},
++			() => ({ accountId }),
++		);
++		session.state.model = { ...session.state.model!, id: "model-1" };
++		Object.defineProperty(session, "cachedUsageReports", { get: () => reports });
++		const component = new StatusLineComponent(session, statusLineHost);
++		try {
++			expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 1, resetsAt: reset } });
++			accountId = "account-2";
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			accountId = "account-1";
++			session.state.model = { ...session.state.model!, id: "model-2" };
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			session.state.model = { ...session.state.model!, id: "model-1" };
++			expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 1 } });
++			session.state.model = { ...session.state.model!, provider: "anthropic" };
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++			expect(calls).toBe(0);
++		} finally {
++			component.dispose();
++		}
++	});
++
++	it("does not replace a shared reset snapshot with a late private refresh result", async () => {
++		const pending = Promise.withResolvers<unknown>();
++		const oldReset = Date.now() + 3_600_000;
++		const newReset = Date.now() + 7 * 24 * 3_600_000;
++		let shared: AgentSession["cachedUsageReports"];
++		const session = makeCodexSession(() => pending.promise);
++		Object.defineProperty(session, "cachedUsageReports", { get: () => shared });
++		const component = new StatusLineComponent(session, statusLineHost);
++		try {
++			await refreshUsage(component);
++			shared = codexUsageReport({ sevenDayPercent: 0, sevenDayResetAt: newReset }) as typeof shared;
++			expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 1 } });
++			pending.resolve(codexUsageReport({ sevenDayPercent: 100, sevenDayResetAt: oldReset }));
++			await flushMicrotasks();
++			expect(component.getQuotaSnapshot()).toMatchObject({ status: "available", sevenDay: { remainingFraction: 1, resetsAt: newReset } });
++		} finally {
++			component.dispose();
++		}
++	});
++
++	it("does not publish an in-flight quota result after the account switches", async () => {
++		let accountId = "account-1";
++		const pending = Promise.withResolvers<unknown>();
++		const session = makeCodexSession(
++			() => pending.promise,
++			() => ({ accountId }),
++		);
++		const component = new StatusLineComponent(session, statusLineHost);
++		try {
++			await refreshUsage(component);
++			accountId = "account-2";
++			pending.resolve(codexUsageReport({ sevenDayPercent: 59, sevenDayResetAt: Date.now() + 1000 }));
++			await flushMicrotasks();
++			expect(component.getQuotaSnapshot()).toEqual({ status: "unavailable" });
++		} finally {
++			component.dispose();
++		}
++	});
++
+ 	it("does not invoke usage fetching synchronously on the render path", async () => {
+ 		let calls = 0;
+ 		const component = new StatusLineComponent(
+diff --git a/packages/coding-agent/test/tools/approval-cached-mode.test.ts b/packages/coding-agent/test/tools/approval-cached-mode.test.ts
+index bcad4f6f37..2fc37b4844 100644
+--- a/packages/coding-agent/test/tools/approval-cached-mode.test.ts
++++ b/packages/coding-agent/test/tools/approval-cached-mode.test.ts
+@@ -336,6 +336,7 @@ describe("always-ask-cached wrapper cycle", () => {
+ 				notify: () => {},
+ 				onTerminalInput: () => () => {},
+ 				setStatus: () => {},
++				getStatus: () => undefined,
+ 				setWorkingMessage: () => {},
+ 				setWidget: () => {},
+ 				setFooter: () => {},
+diff --git a/packages/tui/src/status-line/component.ts b/packages/tui/src/status-line/component.ts
+index 3fdc4c9155..d2efefb28c 100644
+--- a/packages/tui/src/status-line/component.ts
++++ b/packages/tui/src/status-line/component.ts
+@@ -58,6 +58,7 @@ import type {
+ 	StatusLineSeparatorStyle,
+ 	StatusLineSettings,
+ 	StatusResetExpiry,
++	StatusLineQuota,
+ } from "./types";
+ 
+ /** Sparkline cells the ANSI jobs segment draws after the freshest widget's headline. */
+@@ -796,9 +797,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 	// Provider usage caching (5-min TTL, OAuth/sub only)
+ 	#cachedUsage: {
+ 		tier?: string;
+-		fiveHour?: { percent: number; resetMinutes?: number };
++		fiveHour?: { percent: number; resetMinutes?: number; resetsAt?: number };
+ 		daily?: { percent: number; resetMinutes?: number };
+-		sevenDay?: { percent: number; resetHours?: number };
++		sevenDay?: { percent: number; resetHours?: number; resetsAt?: number };
+ 		monthly?: { percent: number; resetHours?: number };
+ 		resetCredits?: {
+ 			bankedCount: number;
+@@ -810,6 +811,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		};
+ 	} | null = null;
+ 	#cachedUsageContextKey: string | null = null;
++	#observedUsageReports: unknown;
+ 	#usageFetchedAt = 0;
+ 	#usageInFlight = false;
+ 	#usageStartTimer: Timer | null = null;
+@@ -1240,6 +1242,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		this.#onResetExpiryNotice = handler;
+ 	}
+ 
++	/** Read the exact keyed status without invalidating rendering or refreshing state. */
++	getHookStatus(key: string): string | undefined {
++		return this.#hookStatuses.get(key);
++	}
++
+ 	setHookStatus(key: string, text: string | undefined): void {
+ 		if (text === undefined) {
+ 			if (!this.#hookStatuses.delete(key)) return;
+@@ -1516,6 +1523,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 	#invalidateSessionCaches(): void {
+ 		this.#clearUsageStartTimer();
+ 		this.#cachedUsage = null;
++		this.#observedUsageReports = undefined;
+ 		this.#usageFetchedAt = 0;
+ 		this.#usageInFlight = false;
+ 		this.#contextUsageCache = undefined;
+@@ -2033,6 +2041,42 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
+ 	}
+ 
++	/** Select the shared host snapshot with the same native provider/account/model policy. */
++	#syncCachedUsageReports(session: TSession): void {
++		const reports = this.host.cachedUsageReports?.(session);
++		if (!reports) return;
++		const usageContextKey = this.#getUsageContextKey(session);
++		if (reports === this.#observedUsageReports && usageContextKey === this.#cachedUsageContextKey) return;
++		const activeProvider = session.state.model?.provider ?? session.model?.provider;
++		this.#cachedUsage = this.#normalizeUsageReports(reports, {
++			provider: activeProvider,
++			modelId: session.state.model?.id ?? session.model?.id,
++			identity: activeProvider ? this.host.activeAccount(session, activeProvider) : undefined,
++		});
++		this.#observedUsageReports = reports;
++		this.#cachedUsageContextKey = usageContextKey;
++		this.#invalidateStatusLineRenderCache();
++	}
++
++	/** Observe only the native selected cache, without refreshing it or retaining a prior scope. */
++	getQuotaSnapshot(session: TSession = this.session): StatusLineQuota {
++		if (!this.#disposed && session === this.session) this.#syncCachedUsageReports(session);
++		if (
++			this.#disposed ||
++			session !== this.session ||
++			this.#cachedUsageContextKey !== this.#getUsageContextKey(session)
++		)
++			return { status: "unavailable" };
++		const usage = this.#cachedUsage;
++		const window = (value: { percent: number; resetsAt?: number } | undefined) =>
++			value && Number.isFinite(value.percent)
++				? { remainingFraction: 1 - value.percent / 100, resetsAt: value.resetsAt }
++				: undefined;
++		const fiveHour = window(usage?.fiveHour);
++		const sevenDay = window(usage?.sevenDay);
++		return fiveHour || sevenDay ? { status: "available", fiveHour, sevenDay } : { status: "unavailable" };
++	}
++
+ 	/**
+ 	 * Startup redraws only arm a short-delayed task; timeout releases the render
+ 	 * cadence while a late successful fetch can still refresh the cached segment.
+@@ -2041,6 +2085,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		if (this.#disposed) return;
+ 		const now = Date.now();
+ 		const session = this.session;
++		this.#syncCachedUsageReports(session);
+ 		const usageContextKey = this.#getUsageContextKey(session);
+ 		if (this.#cachedUsageContextKey !== usageContextKey) {
+ 			this.#cachedUsage = null;
+@@ -2063,6 +2108,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 			return;
+ 		}
+ 		const sequence = ++this.#usageRefreshSequence;
++		const usageContextKey = this.#getUsageContextKey(session);
+ 		const signal = AbortSignal.timeout(STATUS_USAGE_REFRESH_TIMEOUT_MS);
+ 		let reportsPromise: Promise<unknown> | undefined;
+ 		try {
+@@ -2071,23 +2117,33 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 				session,
+ 				await this.#raceUsageRefreshWithSignal(reportsPromise, signal),
+ 				sequence,
++				usageContextKey,
+ 			);
+ 		} catch {
+ 			if (this.session !== session) return;
+ 			this.#usageFetchedAt = Date.now();
+ 			if (signal.aborted && reportsPromise) {
+-				this.#observeLateUsageRefresh(session, reportsPromise, sequence);
++				this.#observeLateUsageRefresh(session, reportsPromise, sequence, usageContextKey);
+ 			}
+ 		} finally {
+ 			if (this.session === session) this.#usageInFlight = false;
+ 		}
+ 	}
+ 
+-	#applyUsageRefreshReports(session: TSession, reports: unknown, sequence: number): void {
+-		if (this.#disposed || this.session !== session || sequence < this.#latestAppliedUsageRefreshSequence) {
++	#applyUsageRefreshReports(session: TSession, reports: unknown, sequence: number, usageContextKey: string): void {
++		if (
++			this.#disposed ||
++			this.session !== session ||
++			usageContextKey !== this.#getUsageContextKey(session) ||
++			sequence < this.#latestAppliedUsageRefreshSequence
++		) {
+ 			return;
+ 		}
+ 		this.#latestAppliedUsageRefreshSequence = sequence;
++		// A dashboard/reset refresh may have completed while our own request was
++		// pending. The session's shared snapshot, not a private TTL, owns freshness.
++		reports = this.host.cachedUsageReports?.(session) ?? reports;
++		this.#observedUsageReports = reports;
+ 		const activeProvider = session.state.model?.provider ?? session.model?.provider;
+ 		const activeModelId = session.state.model?.id ?? session.model?.id;
+ 		const activeIdentity = activeProvider ? this.host.activeAccount(session, activeProvider) : undefined;
+@@ -2100,6 +2156,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 			activeProvider === "openai-codex" ? this.#normalizeCodexResetSnapshot(reports, activeIdentity) : null;
+ 		const usageChanged = this.#cachedUsage !== normalized;
+ 		this.#cachedUsage = normalized;
++		this.#cachedUsageContextKey = usageContextKey;
+ 		this.#usageFetchedAt = Date.now();
+ 		// Usage fetch is async; without a repaint the top border stays blank until
+ 		// some unrelated event (git resolve, keystroke, …) rebuilds it.
+@@ -2144,10 +2201,15 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		this.#onResetExpiryNotice(notice);
+ 	}
+ 
+-	#observeLateUsageRefresh(session: TSession, reportsPromise: Promise<unknown>, sequence: number): void {
++	#observeLateUsageRefresh(
++		session: TSession,
++		reportsPromise: Promise<unknown>,
++		sequence: number,
++		usageContextKey: string,
++	): void {
+ 		void reportsPromise
+ 			.then(reports => {
+-				this.#applyUsageRefreshReports(session, reports, sequence);
++				this.#applyUsageRefreshReports(session, reports, sequence, usageContextKey);
+ 			})
+ 			.catch(() => {
+ 				if (this.#disposed || this.session !== session || sequence < this.#latestAppliedUsageRefreshSequence) {
+@@ -2240,9 +2302,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		context: { provider?: string; modelId?: string; identity?: OAuthAccountIdentity },
+ 	): {
+ 		tier?: string;
+-		fiveHour?: { percent: number; resetMinutes?: number };
++		fiveHour?: { percent: number; resetMinutes?: number; resetsAt?: number };
+ 		daily?: { percent: number; resetMinutes?: number };
+-		sevenDay?: { percent: number; resetHours?: number };
++		sevenDay?: { percent: number; resetHours?: number; resetsAt?: number };
+ 		monthly?: { percent: number; resetHours?: number };
+ 		resetCredits?: {
+ 			bankedCount: number;
+@@ -2394,9 +2456,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 				: undefined;
+ 		if (!selectedGroup) return resetCredits ? { resetCredits } : null;
+ 
+-		let fiveHour: { percent: number; resetMinutes?: number } | undefined;
++		let fiveHour: { percent: number; resetMinutes?: number; resetsAt?: number } | undefined;
+ 		let daily: { percent: number; resetMinutes?: number } | undefined;
+-		let sevenDay: { percent: number; resetHours?: number } | undefined;
++		let sevenDay: { percent: number; resetHours?: number; resetsAt?: number } | undefined;
+ 		let monthly: { percent: number; resetHours?: number } | undefined;
+ 		let monthlyPriority = Number.POSITIVE_INFINITY;
+ 		const cursorMonthlyPriority = (limitId: unknown): number => {
+@@ -2411,6 +2473,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 			if (candidate.windowClass === "5h" && !fiveHour) {
+ 				fiveHour = {
+ 					percent: candidate.fraction * 100,
++					resetsAt: candidate.resetsAt,
+ 					resetMinutes:
+ 						typeof candidate.resetsAt === "number"
+ 							? Math.max(0, Math.round((candidate.resetsAt - now) / 60_000))
+@@ -2429,6 +2492,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 			if (candidate.windowClass === "7d" && !sevenDay) {
+ 				sevenDay = {
+ 					percent: candidate.fraction * 100,
++					resetsAt: candidate.resetsAt,
+ 					resetHours:
+ 						typeof candidate.resetsAt === "number"
+ 							? Math.max(0, Math.round((candidate.resetsAt - now) / 3_600_000))
+@@ -2908,6 +2972,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 	}
+ 
+ 	#buildStatusLine(width: number, layout: StatusLineLayout = "box", previewTitle?: string): CachedStatusLine {
++		if (!this.#disposed) this.#syncCachedUsageReports(this.session);
+ 		const effectiveSettings = this.#resolveSettings();
+ 		const externalInputs = this.#externalInputsProbe;
+ 		this.#readStatusLineExternalInputs(externalInputs);
+diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
+index 5418734893..63a4862576 100644
+--- a/packages/tui/src/status-line/host.ts
++++ b/packages/tui/src/status-line/host.ts
+@@ -97,6 +97,8 @@ export interface StatusLineHost<TSession extends StatusLineSession = StatusLineS
+ 	activeAccount(session: TSession, provider: string): StatusAccountIdentity | undefined;
+ 	canFetchUsageReports(session: TSession): boolean;
+ 	fetchUsageReports(session: TSession, signal: AbortSignal): Promise<unknown>;
++	/** Latest host-owned report snapshot, including refreshes initiated outside the status line. Never fetches. */
++	cachedUsageReports?(session: TSession): readonly UsageReport[] | undefined;
+ 	resolveActiveRepo(cwd: string): ActiveRepoContext | null;
+ 	lookupPullRequest(cwd: string): Promise<{ stdout: string; exitCode: number }>;
+ 	calculateTokensPerSecond(messages: readonly AgentMessage[], isStreaming: boolean): number | null;
+diff --git a/packages/tui/src/status-line/types.ts b/packages/tui/src/status-line/types.ts
+index 47917bfb72..ceab87749d 100644
+--- a/packages/tui/src/status-line/types.ts
++++ b/packages/tui/src/status-line/types.ts
+@@ -16,6 +16,33 @@ export interface ContextUsage {
+ 	percent: number;
+ }
+ 
++/** Provider-reported allowance. Reset instants are Unix milliseconds, not countdowns. */
++export interface StatusLineQuotaWindow {
++	readonly remainingFraction: number;
++	readonly resetsAt?: number;
++}
++
++export type StatusLineQuota =
++	| { readonly status: "unavailable" }
++	| {
++			readonly status: "available";
++			readonly fiveHour?: StatusLineQuotaWindow;
++			readonly sevenDay?: StatusLineQuotaWindow;
++	  };
++
++/** Synchronous host readings; observing these values never starts work or fetches usage. */
++export interface StatusLineMetrics {
++	readonly compaction:
++		| { readonly status: "enabled"; readonly thresholdTokens: number }
++		| { readonly status: "disabled" | "unavailable" };
++	/** The session's native generation meter, including its hold/decay semantics. */
++	readonly generationRate:
++		| { readonly status: "available"; readonly tokensPerSecond: number }
++		| { readonly status: "unavailable" };
++	/** Native selected cache only; unavailable in hosts without a native quota snapshot. */
++	readonly quota: StatusLineQuota;
++}
++
+ /** Debounced footer snapshot a collab host broadcasts to guests. */
+ export type CollabSessionState = SessionState & {
+ 	/**

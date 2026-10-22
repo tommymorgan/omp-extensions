@@ -1,0 +1,36 @@
+#!/usr/bin/env bun
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import { launchCompanion, optionsSchema, updateCompanion } from "../src/lifecycle";
+
+try {
+  const stock = process.env.OMP_STATUSLINE_STOCK ?? Bun.which("omp");
+  if (!stock) throw new Error("Stock omp is unavailable on PATH. Set OMP_STATUSLINE_STOCK to the official executable; run omp-statusline update after restoring stock.");
+  if (await fs.realpath(stock) === await fs.realpath(import.meta.path)) throw new Error("Stock invocation resolves to omp-statusline itself; set OMP_STATUSLINE_STOCK to official omp.");
+  const options = optionsSchema.parse({ stock, root: process.env.OMP_STATUSLINE_ROOT ?? path.join(process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local/state"), "omp-statusline") });
+  const args = process.argv.slice(2);
+  if (args[0] === "update") {
+    if (args.length !== 1) throw new Error("Usage: omp-statusline update");
+    const started = performance.now();
+    let stage = "Starting update";
+    const elapsed = () => `${Math.floor((performance.now() - started) / 1000)}s elapsed`;
+    const report = (next: string) => {
+      stage = next;
+      console.error(`[omp-statusline] ${stage} (${elapsed()})`);
+    };
+    report("Starting update; full builds and terminal checks can take several minutes");
+    const heartbeat = setInterval(() => {
+      console.error(`[omp-statusline] Still working: ${stage} (${elapsed()})`);
+    }, 10_000);
+    try {
+      const result = await updateCompanion(options, undefined, report);
+      console.error(`Verified omp-statusline (${result.manifest.version}): ${result.bundle}; official stock ${result.official.command} (${result.official.version}).`);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  } else await launchCompanion(options, args);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}

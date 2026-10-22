@@ -156,6 +156,20 @@ export default function fixture(pi: ExtensionAPI) {
   let lastRead: unknown;
   const wrapped = new Proxy(pi, {
     get(target, property, receiver) {
+      if (property === "registerComposerShape")
+        return (definition: Parameters<ExtensionAPI["registerComposerShape"]>[0]) => {
+          const renderTop = definition.style.renderTop;
+          pi.registerComposerShape({
+            ...definition,
+            style: {
+              ...definition.style,
+              renderTop(chrome) {
+                log({ kind: "native-activity", content: chrome.topBorder?.content ?? "" });
+                return renderTop(chrome);
+              },
+            },
+          });
+        };
       if (property !== "on") return Reflect.get(target, property, receiver);
       return (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
         const existing = handlers.get(name) ?? [];
@@ -179,6 +193,10 @@ export default function fixture(pi: ExtensionAPI) {
               if (uiProperty !== "setWidget") return Reflect.get(uiTarget, uiProperty, uiReceiver);
               return (key: string, content: unknown, options: unknown) => {
                 log({ kind: "widget-installed", key });
+                if (content === undefined) {
+                  ctx.ui.setWidget(key, undefined);
+                  return;
+                }
                 if (typeof content !== "function")
                   throw new Error("Expected real component widget");
                 ctx.ui.setWidget(
@@ -194,6 +212,12 @@ export default function fixture(pi: ExtensionAPI) {
                           key,
                           width,
                           rows,
+                          columns: rows.map((row: string) => Bun.stringWidth(row)),
+                          palette: Object.fromEntries(
+                            (["accent", "success", "warning", "muted", "error"] as const).map((color) => [
+                              color, args[1].fg(color, "X").split("X")[0],
+                            ]),
+                          ),
                           editor: ctx.ui.getEditorComponent()?.name,
                           editorIdentity: editorIdentity(ctx),
                           draft: ctx.ui.getEditorText(),
@@ -270,6 +294,14 @@ export default function fixture(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.sessionManager.getSessionName()) await pi.setSessionName(title);
     log({ kind: "start", session: ctx.sessionManager.getSessionId() });
+  });
+  pi.registerCommand("fixture-mail", {
+    description: "Publish the canonical local producer status without a broker",
+    async handler(args, ctx) {
+      ctx.ui.setStatus("agent-mail", args === "clear" ? undefined : `mail ${args} active`);
+      ctx.ui.setStatus("agent-mail-work", "work published: must stay hidden");
+      log({ kind: "mail-updated", identity: args, calls, quotaFetches });
+    },
   });
   pi.on("agent_end", (_event, ctx) =>
     log({ kind: "agent-end", calls, metrics: nativeMetrics(ctx) }),
