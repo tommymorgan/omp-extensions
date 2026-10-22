@@ -14,10 +14,11 @@ args = parser.parse_args()
 root = pathlib.Path(args.output).resolve()
 root.mkdir(parents=True, exist_ok=False)
 fixture = pathlib.Path(__file__).with_name('reader.ts').resolve()
+producer = pathlib.Path(__file__).with_name('status-producer.ts').resolve()
 checks = []
 config = root / 'isolated.json'
 config.write_text(json.dumps({'startup': {'setupWizard': False, 'checkUpdate': False, 'quiet': True}, 'git': {'enabled': False}, 'compaction': {'thresholdTokens': 300000, 'thresholdPercent': -1}}))
-common = ['--no-extensions', '-e', str(fixture), '--no-skills', '--no-rules', '--no-lsp', '--no-title', '--no-session', '--auto-approve', '--model', 'statusline-owned-fixture/model-one', '--config', str(config), '--tools', 'fixture_wait']
+common = ['--no-extensions', '-e', str(producer), '-e', str(fixture), '--no-skills', '--no-rules', '--no-lsp', '--no-title', '--no-session', '--auto-approve', '--model', 'statusline-owned-fixture/model-one', '--config', str(config), '--tools', 'fixture_wait']
 
 def environment(label, fast=True, unused=False):
     home = root / (label + '-home')
@@ -105,6 +106,56 @@ for label, policy, model, expected in policies:
     observation = next(row for row in rows(label) if row['label']=='probe')
     assert observation['metrics']['compaction'] == expected, observation
     assert observation['calls']==0 and observation['fetches']==0 and observation['readFetches']==0
+
+# API06: a separate producer and reader communicate through native host state.
+# Require this seam as well as metrics so a metrics-only host cannot pass retirement.
+terminal = Terminal('tui-status-semantics', args.candidate)
+try:
+    initial = terminal.until('status-read')
+    assert initial['supported'] and initial['presence'] == 'owned-native-status', initial
+    assert initial['status'] is None and initial['work'] is None and initial['missing'] is None
+    for index, (phase, expected) in enumerate([
+        ('first', '\x1b[32mmail AssignedAgent active\x1b[0m'),
+        ('replace', 'mail ReplacementAgent idle'),
+        ('empty', ''),
+        ('clear', None),
+    ], start=2):
+        terminal.send('/status-produce ' + phase)
+        terminal.send('/metrics-probe')
+        observed = terminal.until('status-read', count=index)
+        assert observed['supported'] and observed['status'] == expected, observed
+        assert observed['work'] == 'work published' and observed['missing'] is None, observed
+        assert observed['presence'] == 'owned-native-status', observed
+        assert observed['readFetches'] == 0 and observed['readCalls'] == 0, observed
+finally: terminal.close()
+run('print-status-absence', args.candidate, [*common, '-p', '/metrics-probe'])
+headless = [row for row in rows('print-status-absence') if row['label'] == 'status-read']
+assert headless and all(row['supported'] and row['presence'] is None and row['status'] is None and row['work'] is None and row['missing'] is None and row['readFetches'] == 0 and row['readCalls'] == 0 for row in headless), headless
+# The UI-enabled RPC adapter forwards writes but must not invent a local cache.
+label = 'rpc-status-absence'
+command = [args.candidate, *common, '--mode', 'rpc']
+proc = subprocess.Popen(command, cwd=root, env=environment(label), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+raw = bytearray()
+observed = []
+try:
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if select.select([proc.stdout], [], [], .1)[0]:
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk: break
+            raw.extend(chunk)
+        observed = [row for row in rows(label) if row['label'] == 'status-read']
+        if observed: break
+        assert proc.poll() is None, (label, proc.returncode, bytes(raw))
+    assert observed and all(row['supported'] and row['presence'] is None and row['status'] is None and row['work'] is None and row['missing'] is None and row['readFetches'] == 0 and row['readCalls'] == 0 for row in observed), observed
+finally:
+    proc.stdin.close()
+    proc.stdin = None
+    remaining, errors = proc.communicate(timeout=15)
+    raw.extend(remaining)
+    (root / (label + '.stdout')).write_bytes(raw)
+    (root / (label + '.stderr')).write_bytes(errors)
+    record(label, command, proc.returncode)
 
 # Actual streaming and native quota collection through the compiled interactive host.
 terminal = Terminal('tui-semantic', args.candidate, fast=False)
@@ -194,6 +245,6 @@ for name,binary in [('baseline',args.baseline),('candidate',args.candidate)]:
 assert messages('baseline-rpc-unused')==messages('candidate-rpc-unused')
 assert all(row.get('metrics') is None for row in rows('candidate-rpc-unused'))
 
-report={'status':'passed','candidate':args.candidate,'candidateSha256':hashlib.file_digest(open(args.candidate,'rb'),'sha256').hexdigest(),'baseline':args.baseline,'checks':checks,'semantics':['API01 four central policy variants without model work','API02 disabled and unavailable','API03 actual streaming, billed completion and tool-time hold; session equality separately covered by package integration test','API04 baseline/candidate print, real TUI and RPC response equivalence with metrics unused','API05 native selected weekly and five-hour cache, exact resets, account/model invalidation and zero read-triggered fetches'],'limits':['Synthetic provider/account data only; no real credentials or provider traffic','Ordinary mode comparisons use an under-threshold fixture, so neither version auto-compacts','Native meter exact instantaneous equality is additionally asserted in the real AgentSession package integration test; no private meter access from the extension']}
+report={'status':'passed','candidate':args.candidate,'candidateSha256':hashlib.file_digest(open(args.candidate,'rb'),'sha256').hexdigest(),'baseline':args.baseline,'checks':checks,'semantics':['API01 four central policy variants without model work','API02 disabled and unavailable','API03 actual streaming, billed completion and tool-time hold; session equality separately covered by package integration test','API04 baseline/candidate print, real TUI and RPC response equivalence with metrics unused','API05 native selected weekly and five-hour cache, exact resets, account/model invalidation and zero read-triggered fetches','API06 separate producer/consumer native keyed status reads, exact ANSI and empty values, replacement, clear, key isolation, absent keys and headless absence; zero reader-triggered fetches/model work'],'limits':['Synthetic provider/account data only; no real credentials or provider traffic','Ordinary mode comparisons use an under-threshold fixture, so neither version auto-compacts','Native meter exact instantaneous equality is additionally asserted in the real AgentSession package integration test; no private meter access from the extension']}
 (root/'result.json').write_text(json.dumps(report,indent=2))
 print(json.dumps(report,indent=2))

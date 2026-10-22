@@ -82,31 +82,43 @@ export function resetCountdown(resetsAt: number | undefined, now: number): strin
   if (hours) return `reset ${hours}h ${rest}m`;
   return `reset ${rest}m`;
 }
-export function upperMetrics(
+export function upperMetricFields(
   metrics: z.infer<typeof metricsSchema>,
   cache: number | undefined,
   used: number | undefined,
   now: number,
-): string {
+) {
   const rate =
     metrics.generationRate.status === "available"
-      ? `${Number(metrics.generationRate.tokensPerSecond.toFixed(1))} tok/s`
-      : "— tok/s";
-  const fields = [
-    rate,
-    `💰 ${cache === undefined ? "unavailable" : percentage(cache)}`,
-    contextMeter(metrics.compaction, used),
+      ? `${metrics.generationRate.tokensPerSecond.toFixed(1).padStart(5)} tok/s`
+      : "    — tok/s";
+  const fields: { text: string; tone: "success" | "warning" | "muted" | "error" }[] = [
+    { text: `💰 ${cache === undefined ? "unavailable" : percentage(cache)}`, tone: "success" },
+    { text: contextMeter(metrics.compaction, used), tone: "warning" },
   ];
-  if (metrics.quota.status === "unavailable") fields.push("Allowance unavailable");
+  if (metrics.quota.status === "unavailable")
+    fields.push({ text: "Allowance unavailable", tone: "muted" });
   else {
     for (const [label, window] of [
       ["Week", metrics.quota.sevenDay],
       ["5h", metrics.quota.fiveHour],
     ] as const)
       if (window)
-        fields.push(
-          `${label} ${percentage(window.remainingFraction * 100)} left · ${resetCountdown(window.resetsAt, now)}`,
-        );
+        fields.push({
+          text: `${label} ${percentage(window.remainingFraction * 100)} left · ${resetCountdown(window.resetsAt, now)}`,
+          tone: window.remainingFraction === 0 ? "error" : "muted",
+        });
   }
-  return fields.join("  ·  ");
+  return { rate, fields };
+}
+
+/** Plain semantic representation used by non-rendering consumers. */
+export function upperMetrics(
+  metrics: z.infer<typeof metricsSchema>,
+  cache: number | undefined,
+  used: number | undefined,
+  now: number,
+): string {
+  const { rate, fields } = upperMetricFields(metrics, cache, used, now);
+  return [rate, ...fields.map((field) => field.text)].join("  ·  ");
 }

@@ -2,7 +2,7 @@
 """Explicit offline feature gate: exact compiled candidate, real PTYs, owned profiles.
 Keeps captures and observations. Never installs or starts an updater.
 """
-import argparse,errno,fcntl,hashlib,json,os,pathlib,pty,select,struct,subprocess,termios,time,re
+import argparse,errno,fcntl,hashlib,json,os,pathlib,pty,select,signal,struct,subprocess,termios,time,re
 p=argparse.ArgumentParser();p.add_argument('--candidate',required=True);p.add_argument('--bundle',required=True);p.add_argument('--output',required=True);p.add_argument('--expected-version',default='18.12.6');p.add_argument('--editor',default='editor/src/index.ts');p.add_argument('--baseline');a=p.parse_args()
 root=pathlib.Path(a.output).resolve();root.mkdir(parents=True,exist_ok=False)
 bundle=pathlib.Path(a.bundle).resolve();package=bundle/'statusline';fixture=package/'test/runtime/fixture.ts';editor=(bundle/a.editor).resolve()
@@ -58,6 +58,8 @@ class Terminal:
   raise TimeoutError((kind,bytes(self.raw[-5000:])))
  def send(self,text):os.write(self.master,(text+'\r').encode())
  def keys(self,data):os.write(self.master,data)
+ def resize(self,width):
+  self.width=width;fcntl.ioctl(self.master,termios.TIOCSWINSZ,struct.pack('HHHH',40,width,0,0));os.kill(self.proc.pid,signal.SIGWINCH)
  def rail(self,key='upper'):
   self.drain(1.2);rows=[r for r in self.rows() if r.get('kind')=='rail' and r['key'].endswith(key)];assert rows,bytes(self.raw[-4000:]);return rows[-1],strip(' '.join(rows[-1]['rows']))
  def capture(self,name):
@@ -78,15 +80,49 @@ for width in [80,96]:
   check(f'{width} QUOTA01 reported inline remaining',all(s in text for s in ['Week 41% left','5h 74% left','reset 5d 5h','reset 3h 12m']),text)
   check(f'{width} VCS01 jj first complete lower fields','statusline-plan' in lowertext and 'GPT-6.1 Sol' in lowertext and str(t.cwd) in strip(''.join(lower['rows'])),lowertext)
   check(f'{width} UI01 no counters or duplicate title',not any(s in text.replace(title,'')+lowertext for s in ['cache','cost','$','1000000']) and text.count(title)==1,text)
+  colored=''.join(row['rows'])
+  check(f'{width} UI04 semantic title cache budget allowance colors',row['palette']['accent']+title.split(' ')[0] in colored and row['palette']['success']+'💰' in colored and row['palette']['warning'] in colored and row['palette']['muted']+'Week ' in colored,row)
+  check(f'{width} UI04 right edge unavailable rate',any(strip(line).endswith('— tok/s') and columns==row['width'] for line,columns in zip(row['rows'],row['columns'])),row)
+  check(f'{width} UI05 absent identity omitted','✉' not in lowertext and 'work published' not in lowertext,lowertext)
+  identities=['id','agent-native-fixture-0123456789abcdef-0123456789abcdef','agent-next-0123456789abcdef-0123456789abcdef']
+  for index,identity in enumerate([*identities,'unassigned','clear'],1):
+   t.send('/fixture-mail '+identity);published=t.until('mail-updated',index);mailrow,mailtext=t.rail('lower')
+   full=strip(''.join(mailrow['rows']))
+   check(f'{width} UI05 identity {index}',(identity in full if identity not in ['unassigned','clear'] else '✉' not in full) and all(old not in full for old in identities if old!=identity) and 'work published' not in full,full)
+   if identity not in ['unassigned','clear']:
+    check(f'{width} UI05 identity shares facts at measured right edge {index}',any(strip(line).endswith(identity) and strip(line).split('✉ ')[0].strip(' ·') and columns==mailrow['width'] for line,columns in zip(mailrow['rows'],mailrow['columns'])),mailrow)
+   if identity=='id' and len(str(t.cwd))+len('▰   ·  ⎇ statusline-plan  ·  ✉ id')<=width:
+    check(f'{width} UI05 fitting directory bookmark and ID share physical row',any(str(t.cwd) in strip(line) and 'statusline-plan' in strip(line) and strip(line).endswith(identity) for line in mailrow['rows']),mailrow)
+   check(f'{width} UI05 full facts retained {index}',str(t.cwd) in full and 'statusline-plan' in full and 'GPT-6.1 Sol' in full and all(c<=mailrow['width'] for c in mailrow['columns']),mailrow)
+   check(f'{width} UI05 status read adds no provider traffic {index}',published['calls']==mailrow['calls'] and published['quotaFetches']==mailrow['quotaFetches'],mailrow)
+  long_identity='agent-native-'+('0123456789abcdef-'*8)+'complete'
+  t.send('/fixture-mail '+long_identity);t.until('mail-updated',6);mailrow,_=t.rail('lower')
+  check(f'{width} UI05 oversized identity wraps without loss',long_identity in strip(''.join(mailrow['rows'])) and str(t.cwd) in strip(''.join(mailrow['rows'])) and all(c<=mailrow['width'] for c in mailrow['columns']),mailrow)
+  t.send('/fixture-mail clear');t.until('mail-updated',7)
   t.capture('initial')
   # Native streaming and tools run in the actual compiled host, not a fake widget context.
   t.send('owned first prompt');t.until('tool-before');t.capture('active-tool');t.until('agent-end');t.drain(1)
   rails=[r for r in t.rows() if r.get('kind')=='rail' and r['key'].endswith('upper')]
   available=[r for r in rails if r['metrics']['generationRate']['status']=='available']
-  check(f'{width} UI03 native rate equality',bool(available) and all((str(float(round(r['metrics']['generationRate']['tokensPerSecond'],1))).removesuffix('.0')+' tok/s') in ' '.join(r['rows']) for r in available))
+  check(f'{width} UI03 native rate equality',bool(available) and all((match:=re.search(r'([0-9]+(?:\.[0-9]+)?) tok/s',' '.join(r['rows']))) and abs(float(match.group(1))-r['metrics']['generationRate']['tokensPerSecond'])<=0.050000001 for r in available))
   tools=[r for r in t.rows() if r.get('kind') in ['tool-before','tool-after']]
   check(f'{width} UI03 native tool rate retained',len(tools)==2 and tools[0]['metrics']['generationRate']==tools[1]['metrics']['generationRate'],tools)
+  check(f'{width} UI04 right edge live native rate',all(any(re.search(r'[0-9.]+ tok/s$',strip(line)) and columns==r['width'] for line,columns in zip(r['rows'],r['columns'])) for r in available),available[-1] if available else None)
+  left_starts=[strip(r['rows'][next(i for i,line in enumerate(r['rows']) if '💰' in strip(line))]).index('💰') for r in rails if any('💰' in strip(line) for line in r['rows'])]
+  check(f'{width} UI04 stable left facts',set(left_starts)=={0},left_starts)
+  native=[strip(r['content']).replace('─','').strip() for r in t.rows() if r.get('kind')=='native-activity']
+  lowerrails=[r for r in t.rows() if r.get('kind')=='rail' and r['key'].endswith('lower')]
+  active=[n for n in native if re.search(r'\d+(?:\.\d+)?[sm]',n)]
+  check(f'{width} UI04 native activity transitions observed',bool(active) and len(set(native))>1,native[-12:])
+  check(f'{width} UI04 native activity shares complete lower facts',any(n in strip(''.join(r['rows'])) and str(t.cwd) in strip(''.join(r['rows'])) and 'GPT-6.1 Sol' in strip(''.join(r['rows'])) for n in active for r in lowerrails),lowerrails[-1] if lowerrails else None)
+  idlelower,idletext=t.rail('lower')
+  idle_native=[strip(r['content']).replace('─','').strip() for r in t.rows() if r.get('kind')=='native-activity']
+  brand=next((n for n in native if n),None)
+  check(f'{width} UI04 returned idle brand without stale timer',bool(brand) and idle_native[-1]==brand and brand in strip(''.join(idlelower['rows'])) and not re.search(r'\d+[smh](?:\s|$)',idletext),{'brand':brand,'lastNative':idle_native[-1],'lower':idlelower})
   t.capture('completed')
+  for resized in [96 if width==80 else 80,width]:
+   t.resize(resized);resizedrow,resizedtext=t.rail()
+   check(f'{width} UI04 resize to {resized} preserves rate and facts',resizedrow['width']==resized and all(c<=resized for c in resizedrow['columns']) and all(s in resizedtext for s in ['💰','Week 41% left','5h 74% left']) and any(strip(line).endswith('tok/s') and columns==resized for line,columns in zip(resizedrow['rows'],resizedrow['columns'])),resizedrow)
   t.keys(b'\x1b[A');t.keys(b'\x1b[H');t.keys(b'X');r,_=t.rail()
   check(f'{width} EDITOR01 recall Home retains prompt',r['draft']=='Xowned first prompt',r['draft'])
   t.keys(b'\x03')
@@ -148,6 +184,7 @@ for case,vcs_kind in [('weekly','git'),('no-reset','none'),('unavailable','none'
   if case=='unavailable':check('QUOTA02 no snapshot nonnumeric','Allowance unavailable' in text and 'Week ' not in text and '5h ' not in text,text)
   if case=='exhausted':
    check('QUOTA03 initial exhaustion','Week 4% left · reset 2h 0m' in text and '5h 0% left · reset 30m' in text,text)
+   check('UI04 exhausted allowance uses error color',r['palette']['error']+'5h 0% left' in ''.join(r['rows']),r)
    t.send('/fixture-case pair');t.until('case-ready');r,text=t.rail()
    check('QUOTA03 begins with a real unequal-response cache window','💰 50%' in text,text)
    fetches_before_clock=r['quotaFetches']

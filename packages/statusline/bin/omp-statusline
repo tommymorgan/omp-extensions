@@ -12,8 +12,23 @@ try {
   const args = process.argv.slice(2);
   if (args[0] === "update") {
     if (args.length !== 1) throw new Error("Usage: omp-statusline update");
-    const result = await updateCompanion(options);
-    console.error(`Verified omp-statusline (${result.manifest.version}): ${result.bundle}; official stock ${result.official.command} (${result.official.version}).`);
+    const started = performance.now();
+    let stage = "Starting update";
+    const elapsed = () => `${Math.floor((performance.now() - started) / 1000)}s elapsed`;
+    const report = (next: string) => {
+      stage = next;
+      console.error(`[omp-statusline] ${stage} (${elapsed()})`);
+    };
+    report("Starting update; full builds and terminal checks can take several minutes");
+    const heartbeat = setInterval(() => {
+      console.error(`[omp-statusline] Still working: ${stage} (${elapsed()})`);
+    }, 10_000);
+    try {
+      const result = await updateCompanion(options, undefined, report);
+      console.error(`Verified omp-statusline (${result.manifest.version}): ${result.bundle}; official stock ${result.official.command} (${result.official.version}).`);
+    } finally {
+      clearInterval(heartbeat);
+    }
   } else await launchCompanion(options, args);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
