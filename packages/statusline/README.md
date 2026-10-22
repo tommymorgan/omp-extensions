@@ -1,6 +1,6 @@
-# Private status-line baseline staging
+# Private status-line companion components
 
-This package currently provides private build helpers only. It registers no OMP extension, publishes no command, installs nothing globally, and does not modify stock OMP or select a companion bundle.
+This package provides private build helpers and an explicitly loaded personal UI extension. It registers no discoverable OMP extension, publishes no command, installs nothing globally, and does not modify stock OMP or select a companion bundle.
 
 ## Supported build
 
@@ -29,4 +29,16 @@ STATUSLINE_REAL_BASELINE=1 bun test packages/statusline/test/official-boundary.t
 
 The opt-in real check builds official18.12.6, runs its worker smoke, and compares stock checksum plus an owned stock RPC witness before/after. It preserves the resulting `/tmp/statusline-official-proof-*` candidate and JSON evidence for inspection. It makes no model request. Ordinary tests exercise real local Git repositories and subprocess failures; executable fixtures test negative gates only and never substitute for the real baseline build.
 
-This is not yet an installable status-line companion. No public `omp-statusline` launcher, API patch, UI extension, settings overlay, updater or activation is included here.
+## Explicit supported-host UI
+
+`src/extension.ts` requires the supported `getStatusLineMetrics()` budget/native-rate/native-quota contract, not merely an official version number. Load it explicitly with `-e` and apply `--config packages/statusline/overlay.json` only to the companion process. The overlay is not written into ordinary settings. Keep the existing combined editor enabled; this extension never claims its factory or input.
+
+Upper widgets wrap the complete title, host rate, weighted last-ten completed response cache percentage, twelve-cell used compaction-budget meter and reported remaining Week/5h allowance. Below-editor facts wrap hostname, full model/path and the native jj-first VCS label. Native OMP retains its own brand/activity/timer. No cumulative counters are enabled. Missing usage consumes a response slot and makes cache unavailable; model-only changes do not reset active-branch history.
+
+Quota reads use only the native selected snapshot. A one-second presentation refresh updates countdowns and retained native rate without fetching. VCS uses the host's shared active-repository resolver and native display detector with bounded asynchronous label reads. Noninteractive hosts install no widgets or timers; unsupported TUI hosts receive capability guidance without editor replacement.
+
+The reusable compiled feature gate is `test/runtime/verify.py`. It accepts `--candidate`, `--bundle`, `--expected-version`, an optional `--baseline` unsupported host, and a new owned `--output` directory. All runtime code comes from the supplied staged bundle, not this checkout: `statusline/src/{extension,rails}.ts`, `statusline/overlay.json`, `statusline/test/runtime/fixture.ts`, the owned `statusline/node_modules/zod` dependency, and unchanged `editor/src`. The optional `--editor` is relative to that bundle (default `editor/src/index.ts`); escaping paths and bundle symlinks are rejected. No rebuilding occurs. Its `bundle-assets.json` records the binary and every staged asset checksum.
+
+The gate creates controlling PTYs at80/96columns, native local provider/quota fixtures, saved sessions and real tree transitions. It checks current host budget changes, native streaming/tool rate, cache windows/deduplication, countdowns, editor keys, and unsupported/headless isolation. It preserves raw PTY captures and actual component observations. `render_captures.py` optionally rasterizes those captures with pyte and Pillow for visual inspection; this is not a reconstructed UI or a dependency of the semantic gate. No credentials or external model calls are used.
+
+This is not an installed companion. No public launcher, updater, global plugin registration or live activation is included.
