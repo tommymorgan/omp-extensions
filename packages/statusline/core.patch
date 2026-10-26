@@ -1,5 +1,5 @@
 diff --git a/docs/extensions.md b/docs/extensions.md
-index 9bc7786fc4..ed5136f2c3 100644
+index ed351ab8fd..01092f130e 100644
 --- a/docs/extensions.md
 +++ b/docs/extensions.md
 @@ -351,6 +351,8 @@ Handlers and tool `execute` receive `ctx` with:
@@ -37,7 +37,7 @@ index 9bc7786fc4..ed5136f2c3 100644
  - `setWorkingMessage`
  - theme switching/loading (`setTheme` returns failure)
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 91190dca11..49994e968b 100644
+index be03d9e84b..6245e18f46 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -2,6 +2,15 @@
@@ -53,11 +53,11 @@ index 91190dca11..49994e968b 100644
 +
 +- Keep native status-line quota and extension metrics aligned with the session's latest usage reports after `/usage` refreshes and saved resets, without fetching on render or mixing provider/account/model scopes.
 +
- ## [18.12.6] - 2026-10-21
+ ## [18.13.0] - 2026-10-26
  
- ### Added
+ ### Breaking Changes
 diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts
-index 7b9804375d..b89e0aa4e9 100644
+index 64044c87a6..7e570fbf1f 100644
 --- a/packages/coding-agent/src/extensibility/extensions/runner.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/runner.ts
 @@ -465,6 +465,7 @@ const noOpUIContext: ExtensionUIContext = {
@@ -103,7 +103,7 @@ index 7b9804375d..b89e0aa4e9 100644
  			getAsyncJobSnapshot: () => this.#getAsyncJobSnapshotFn(),
  			hasUI: this.hasUI(),
 diff --git a/packages/coding-agent/src/extensibility/extensions/types.ts b/packages/coding-agent/src/extensibility/extensions/types.ts
-index c78dfd9fc2..58272cc503 100644
+index 8bed9c1899..5cac96330e 100644
 --- a/packages/coding-agent/src/extensibility/extensions/types.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/types.ts
 @@ -36,7 +36,8 @@ import type {
@@ -139,7 +139,7 @@ index c78dfd9fc2..58272cc503 100644
  	/** Get a read-only snapshot of async jobs owned by this session. */
  	getAsyncJobSnapshot(): AsyncJobSnapshot | null;
  	/** Compact the session context (interactive mode shows UI). */
-@@ -2173,6 +2183,7 @@ export interface ExtensionContextActions {
+@@ -2178,6 +2188,7 @@ export interface ExtensionContextActions {
  	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
  	openPlanReview?: () => Promise<boolean>;
  	getContextUsage: () => ContextUsage | undefined;
@@ -148,7 +148,7 @@ index c78dfd9fc2..58272cc503 100644
  	getSystemPrompt: () => string[];
  	runEphemeralTurn?: (options: EphemeralTurnOptions) => Promise<EphemeralTurnResult>;
 diff --git a/packages/coding-agent/src/modes/acp/acp-agent.ts b/packages/coding-agent/src/modes/acp/acp-agent.ts
-index 834930b02b..f8ad78e8ae 100644
+index bf18ac6ea6..92cb678b55 100644
 --- a/packages/coding-agent/src/modes/acp/acp-agent.ts
 +++ b/packages/coding-agent/src/modes/acp/acp-agent.ts
 @@ -749,6 +749,7 @@ export function createAcpExtensionUiContext(
@@ -159,7 +159,7 @@ index 834930b02b..f8ad78e8ae 100644
  		setWorkingMessage: () => {},
  		setWidget: () => {},
  		setFooter: () => {},
-@@ -3015,6 +3016,7 @@ export class AcpAgent implements Agent {
+@@ -3016,6 +3017,7 @@ export class AcpAgent implements Agent {
  				hasPendingMessages: () => record.session.queuedMessageCount > 0,
  				shutdown: () => {},
  				getContextUsage: () => record.session.getContextUsage(),
@@ -168,7 +168,7 @@ index 834930b02b..f8ad78e8ae 100644
  				runEphemeralTurn: args => record.session.runEphemeralTurn(args),
  				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 diff --git a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
-index e05570fe7f..8976c185b2 100644
+index 27002bae3e..0ef6ff7323 100644
 --- a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
 @@ -160,6 +160,7 @@ export class ExtensionUiController {
@@ -202,10 +202,10 @@ index e05570fe7f..8976c185b2 100644
  			getSystemPrompt: () => this.ctx.session.systemPrompt,
  			runEphemeralTurn: args => this.ctx.session.runEphemeralTurn(args),
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-index ef2d73db95..406219ab10 100644
+index 1540fb19e7..9811d0abbf 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-@@ -1506,6 +1506,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions
+@@ -1511,6 +1511,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions
  			} as RpcExtensionUIRequest);
  		}
  
@@ -251,10 +251,10 @@ index 208af45823..58292c5bfc 100644
  	lookupPullRequest: cwd =>
  		github.run(cwd, ["pr", "view", "--json", "number,url"], AbortSignal.timeout(GH_COMMAND_TIMEOUT_MS)),
 diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
-index cb90096e48..b1a4c65e9e 100644
+index cd35ccf7e3..505870cfca 100644
 --- a/packages/coding-agent/src/session/agent-session.ts
 +++ b/packages/coding-agent/src/session/agent-session.ts
-@@ -162,7 +162,8 @@ import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } fr
+@@ -164,7 +164,8 @@ import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } fr
  import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
  import { ManagedTimers } from "../extensibility/extensions/managed-timers";
  import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
@@ -263,8 +263,8 @@ index cb90096e48..b1a4c65e9e 100644
 +import { getSessionCompactionBudget } from "./context-usage-runtime";
  import type { CustomCommandContext } from "../extensibility/custom-commands/types";
  import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
- import type { Skill, SkillWarning } from "../extensibility/skills";
-@@ -638,6 +639,7 @@ const noOpUIContext: ExtensionUIContext = {
+ import {
+@@ -649,6 +650,7 @@ const noOpUIContext: ExtensionUIContext = {
  	notify: () => {},
  	onTerminalInput: () => () => {},
  	setStatus: () => {},
@@ -272,7 +272,7 @@ index cb90096e48..b1a4c65e9e 100644
  	setWorkingMessage: () => {},
  	setWidget: () => {},
  	setTitle: () => {},
-@@ -8700,6 +8702,7 @@ export class AgentSession implements SettingsScope {
+@@ -8865,6 +8867,7 @@ export class AgentSession implements SettingsScope {
  			getPendingPlanReview: () => undefined,
  			openPlanReview: async () => false,
  			getContextUsage: () => this.getContextUsage(),
@@ -280,7 +280,7 @@ index cb90096e48..b1a4c65e9e 100644
  			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
  			waitForIdle: () => this.waitForIdle(),
  			newSession: async options => {
-@@ -13515,6 +13518,16 @@ export class AgentSession implements SettingsScope {
+@@ -13782,6 +13785,16 @@ export class AgentSession implements SettingsScope {
  		return this.#stats.getContextUsage(options);
  	}
  
@@ -297,7 +297,7 @@ index cb90096e48..b1a4c65e9e 100644
  	/**
  	 * Monotonic counter that changes whenever the in-flight pending context
  	 * snapshot is set or cleared. Status-line context memoization keys on this so
-@@ -13602,11 +13615,19 @@ export class AgentSession implements SettingsScope {
+@@ -13869,11 +13882,19 @@ export class AgentSession implements SettingsScope {
  	 * credential. Never throws for business outcomes — inspect `code`.
  	 */
  	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
@@ -450,7 +450,7 @@ index 902f899524..f0589e0ef5 100644
  		const tempDir = TempDir.createSync("@branch-local-");
  		const { session, sessionManager, agent } = createSession(tempDir);
 diff --git a/packages/coding-agent/test/extensions-runner.test.ts b/packages/coding-agent/test/extensions-runner.test.ts
-index 5948bc7744..fe436d354b 100644
+index 1ef54e5d89..7fb9762630 100644
 --- a/packages/coding-agent/test/extensions-runner.test.ts
 +++ b/packages/coding-agent/test/extensions-runner.test.ts
 @@ -151,6 +151,11 @@ describe("ExtensionRunner", () => {

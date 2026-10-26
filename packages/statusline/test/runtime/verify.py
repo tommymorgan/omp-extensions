@@ -40,7 +40,9 @@ class Terminal:
   env['STATUSLINE_QUOTA']=case
   self.command=[binary or a.candidate,'--no-extensions','-e',str(editor),'-e',str(fixture),'--no-skills','--no-rules','--no-lsp','--no-title','--auto-approve','--model','statusline-ui-fixture/model-one','--config',str(config),'--config',str(package/'overlay.json'),'--tools','fixture_wait']
   self.proc=subprocess.Popen(self.command,cwd=self.cwd,env=env,stdin=slave,stdout=slave,stderr=slave,preexec_fn=ctty,close_fds=True);os.close(slave)
- def rows(self):return [json.loads(row) for row in self.log.read_text().splitlines()] if self.log.exists() else []
+ def rows(self):
+  # The fixture may still be appending its last JSON record; only newline-committed rows are readable.
+  return [json.loads(row) for row in self.log.read_bytes().split(b'\n')[:-1]] if self.log.exists() else []
  def drain(self,seconds):
   end=time.monotonic()+seconds
   while time.monotonic()<end:
@@ -70,6 +72,22 @@ class Terminal:
   if self.proc.poll() is None:self.keys(b'\x03\x03');self.drain(2)
   if self.proc.poll() is None:self.proc.terminate()
   status=self.proc.wait(timeout=15);os.close(self.master);(root/(self.label+'.pty')).write_bytes(self.raw);check(self.label+' clean exit',status==0,status)
+# A phone-width ID must never force an otherwise fitting path into a narrow strip.
+t=Terminal(40,vcs_kind='none')
+try:
+ t.until('start')
+ identity='omp-0123456789abcdef01234567'
+ t.send('/fixture-mail '+identity);t.until('mail-updated')
+ t.keys(b'phone draft stays intact')
+ for width in [40,80,40]:
+  t.resize(width)
+  lower,_=t.rail('lower');visible=[strip(row) for row in lower['rows']]
+  check(f'phone {width} complete path and model',str(t.cwd) in strip(''.join(lower['rows'])) and any('GPT-6.1 Sol' in row for row in visible),lower)
+  check(f'phone {width} complete right-aligned identity',any(row.endswith(identity) and columns==width for row,columns in zip(visible,lower['columns'])),lower)
+  check(f'phone {width} bounded rows and preserved draft',all(columns<=width for columns in lower['columns']) and lower['draft']=='phone draft stays intact',lower)
+  t.capture(f'phone-{width}')
+finally:t.close()
+
 for width in [80,96]:
  t=Terminal(width)
  try:

@@ -5,7 +5,7 @@ import { getComposerStyle, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { resolveActiveRepoContextSync } from "@oh-my-pi/pi-coding-agent/utils/active-repo-context";
 import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
-import { metricsSchema, recentCache, upperMetricFields } from "./rails";
+import { lowerRail, metricsSchema, recentCache, upperMetricFields } from "./rails";
 
 /** Explicit loading only: no package discovery registration or editor ownership. */
 export default function statusline(pi: ExtensionAPI): void {
@@ -193,7 +193,6 @@ export default function statusline(pi: ExtensionAPI): void {
             theme.fg(index === 1 ? "accent" : index === 3 ? "warning" : "muted",
               sanitizeStatusText(field)),
           );
-          const text = [nativeActivity, ...renderedFields].filter(Boolean).join(separator);
           const getter = Reflect.get(active.ui, "getStatus");
           const status: unknown = typeof getter === "function"
             ? getter.call(active.ui, "agent-mail") : undefined;
@@ -201,39 +200,13 @@ export default function statusline(pi: ExtensionAPI): void {
             ? /^mail ([^\s]+) \S+(?: .*)?$/u.exec(status)?.[1] : undefined;
           const mail = identity && identity !== "unassigned"
             ? theme.fg("accent", `✉ ${sanitizeStatusText(identity)}`) : undefined;
-          if (mail) {
-            const repository = renderedFields.slice(2).join(separator);
-            const padding = width - Bun.stringWidth(repository) -
-              Bun.stringWidth(separator) - Bun.stringWidth(mail);
-            if (padding >= 0 &&
-              Bun.stringWidth(text) + Bun.stringWidth(separator) + Bun.stringWidth(mail) > width) {
-              const activity = [nativeActivity, ...renderedFields.slice(0, 2)]
-                .filter(Boolean).join(separator);
-              return [
-                ...wrapTextWithAnsi(activity, Math.max(1, width)),
-                repository + separator + " ".repeat(padding) + mail,
-              ];
-            }
-          }
-          const rows = wrapTextWithAnsi(text, Math.max(1, width));
-          if (mail) {
-            const last = rows.at(-1) ?? "";
-            const gap = width - Bun.stringWidth(last) - Bun.stringWidth(mail);
-            if (gap >= Bun.stringWidth(separator)) rows[rows.length - 1] = last + separator +
-              " ".repeat(gap - Bun.stringWidth(separator)) + mail;
-            else {
-              const leftWidth = width - Bun.stringWidth(mail) - Bun.stringWidth(separator);
-              if (leftWidth > 0) {
-                // Reflow the final facts row so ordinary IDs never occupy a mail-only row.
-                const tail = wrapTextWithAnsi(rows.pop() ?? "", leftWidth);
-                const final = tail.pop() ?? "";
-                rows.push(...tail, final + separator +
-                  " ".repeat(Math.max(0, width - Bun.stringWidth(final) -
-                    Bun.stringWidth(separator) - Bun.stringWidth(mail))) + mail);
-              } else rows.push(...wrapTextWithAnsi(mail, Math.max(1, width)));
-            }
-          }
-          return rows;
+          return lowerRail(
+            [nativeActivity, ...renderedFields.slice(0, 2)].filter(Boolean),
+            renderedFields.slice(2),
+            mail,
+            width,
+            separator,
+          );
         },
       }),
       { placement: "belowEditor" },

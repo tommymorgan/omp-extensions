@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Keep model names and paths readable on phone-width terminals instead of squeezing them into a narrow strip beside the Agent Mail ID.
 - Apply the approved native themed/icon-led rails: keep native rate at the right edge, retain full wrapped left facts, and share native brand/spinner/elapsed with the lower cwd/jj rail without replacing the combined editor.
 - Show the live assigned agent-mail ID at the right end of the lower rail from the read-only host status feed; omit missing/unassigned identities and work-publication text, with complete ID wrapping and no broker calls.
 - Select an extension-owned composer shape only through the companion overlay, detach widgets/timers on session transitions/shutdown, and extend the compiled-host gate with measured columns, colors, active/idle co-location and live identity changes.
+- Track official18.13.0: rebase the distributed core.patch onto v18.13.0 (011ab73) and judge phone-width cwd completeness across wrapped rows like every sibling gate, because one row can never hold the updater's long proof-root path.
 
 - Refresh remaining allowance and reset deadlines alongside Usage and successful saved resets instead of retaining the status line's older quota snapshot.
 
