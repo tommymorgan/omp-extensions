@@ -1,5 +1,5 @@
 diff --git a/docs/extensions.md b/docs/extensions.md
-index 9bc7786fc4..ed5136f2c3 100644
+index 1fc9cc7..4e1193f 100644
 --- a/docs/extensions.md
 +++ b/docs/extensions.md
 @@ -351,6 +351,8 @@ Handlers and tool `execute` receive `ctx` with:
@@ -11,7 +11,7 @@ index 9bc7786fc4..ed5136f2c3 100644
  - `getAsyncJobSnapshot()` returns the current session's read-only async-job snapshot, or `null` when no session owns the context
  - `compact(instructionsOrOptions?)`: accepts summary focus text or `CompactOptions`, including one-off `mode: "soft" | "remote" | "snapcompact"`, `onComplete`, `onError`, and `suppressContinuation`
  - `isIdle()`, `hasPendingMessages()`, `abort()`
-@@ -878,6 +880,16 @@ before and performs no extra syscalls.
+@@ -893,6 +895,16 @@ before and performs no extra syscalls.
  
  `ctx.ui` implements the `ExtensionUIContext` interface. Support differs by mode.
  
@@ -28,7 +28,7 @@ index 9bc7786fc4..ed5136f2c3 100644
  ### Interactive mode (`extension-ui-controller.ts`)
  
  Supported:
-@@ -1067,6 +1079,7 @@ Unsupported/no-op in RPC implementation:
+@@ -1082,6 +1094,7 @@ Unsupported/no-op in RPC implementation:
  - `onTerminalInput`
  - `custom`; optional `askDialog` is absent
  - `getEditorText` returns `""`; `getEditorComponent` returns `undefined`
@@ -37,7 +37,7 @@ index 9bc7786fc4..ed5136f2c3 100644
  - `setWorkingMessage`
  - theme switching/loading (`setTheme` returns failure)
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 91190dca11..49994e968b 100644
+index 55db5d3..616e705 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -2,6 +2,15 @@
@@ -53,11 +53,11 @@ index 91190dca11..49994e968b 100644
 +
 +- Keep native status-line quota and extension metrics aligned with the session's latest usage reports after `/usage` refreshes and saved resets, without fetching on render or mixing provider/account/model scopes.
 +
- ## [18.12.6] - 2026-10-21
+ ## [18.13.2] - 2026-10-27
  
  ### Added
 diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts
-index 7b9804375d..b89e0aa4e9 100644
+index a8e6184..ce173c4 100644
 --- a/packages/coding-agent/src/extensibility/extensions/runner.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/runner.ts
 @@ -465,6 +465,7 @@ const noOpUIContext: ExtensionUIContext = {
@@ -80,9 +80,9 @@ index 7b9804375d..b89e0aa4e9 100644
  	#compactFn: (instructionsOrOptions?: string | CompactOptions) => Promise<void> = async () => {};
  	#getSystemPromptFn: () => string[] = () => [];
  	#runEphemeralTurnFn?: ExtensionContextActions["runEphemeralTurn"];
-@@ -842,6 +848,13 @@ export class ExtensionRunner {
- 		if (contextActions.getPendingPlanReview) this.#getPendingPlanReviewFn = contextActions.getPendingPlanReview;
- 		if (contextActions.openPlanReview) this.#openPlanReviewFn = contextActions.openPlanReview;
+@@ -845,6 +851,13 @@ export class ExtensionRunner {
+ 		// Assigned unconditionally: a headless rebind must not inherit a previous host's controls.
+ 		this.#sessionModes = contextActions.sessionModes;
  		this.#getContextUsageFn = contextActions.getContextUsage;
 +		this.#getStatusLineMetricsFn =
 +			contextActions.getStatusLineMetrics ??
@@ -94,7 +94,7 @@ index 7b9804375d..b89e0aa4e9 100644
  		this.#compactFn = contextActions.compact;
  		this.#getSystemPromptFn = contextActions.getSystemPrompt;
  		this.#runEphemeralTurnFn = contextActions.runEphemeralTurn;
-@@ -1481,6 +1494,7 @@ export class ExtensionRunner {
+@@ -1485,6 +1498,7 @@ export class ExtensionRunner {
  			ui: this.#uiContext,
  			mode: this.#mode,
  			getContextUsage: () => this.#getContextUsageFn(),
@@ -103,7 +103,7 @@ index 7b9804375d..b89e0aa4e9 100644
  			getAsyncJobSnapshot: () => this.#getAsyncJobSnapshotFn(),
  			hasUI: this.hasUI(),
 diff --git a/packages/coding-agent/src/extensibility/extensions/types.ts b/packages/coding-agent/src/extensibility/extensions/types.ts
-index c78dfd9fc2..58272cc503 100644
+index 36455df..2838dfe 100644
 --- a/packages/coding-agent/src/extensibility/extensions/types.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/types.ts
 @@ -36,7 +36,8 @@ import type {
@@ -113,10 +113,10 @@ index c78dfd9fc2..58272cc503 100644
 -import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 +import type { ContextUsage, StatusLineMetrics } from "@oh-my-pi/pi-tui/status-line/types";
 +export type { StatusLineMetrics, StatusLineQuota, StatusLineQuotaWindow } from "@oh-my-pi/pi-tui/status-line/types";
+ import type { LoopConditionConfig } from "@oh-my-pi/pi-tui/status-line/loop";
  import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
  import type {
- 	Api,
-@@ -345,6 +346,13 @@ export interface ExtensionUIContext {
+@@ -354,6 +355,13 @@ export interface ExtensionUIContext {
  	/** Set status text in the footer/status bar. Pass undefined to clear. */
  	setStatus(key: string, text: string | undefined): void;
  
@@ -130,7 +130,7 @@ index c78dfd9fc2..58272cc503 100644
  	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
  	setWorkingMessage(message?: string): void;
  
-@@ -675,6 +683,8 @@ export interface ExtensionContext {
+@@ -684,6 +692,8 @@ export interface ExtensionContext {
  	mode: ExtensionMode;
  	/** Get current context usage for the active model. */
  	getContextUsage(): ContextUsage | undefined;
@@ -139,19 +139,19 @@ index c78dfd9fc2..58272cc503 100644
  	/** Get a read-only snapshot of async jobs owned by this session. */
  	getAsyncJobSnapshot(): AsyncJobSnapshot | null;
  	/** Compact the session context (interactive mode shows UI). */
-@@ -2173,6 +2183,7 @@ export interface ExtensionContextActions {
- 	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
+@@ -2254,6 +2264,7 @@ export interface ExtensionContextActions {
  	openPlanReview?: () => Promise<boolean>;
+ 	sessionModes?: ExtensionSessionModes;
  	getContextUsage: () => ContextUsage | undefined;
 +	getStatusLineMetrics?: () => StatusLineMetrics;
  	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
  	getSystemPrompt: () => string[];
  	runEphemeralTurn?: (options: EphemeralTurnOptions) => Promise<EphemeralTurnResult>;
 diff --git a/packages/coding-agent/src/modes/acp/acp-agent.ts b/packages/coding-agent/src/modes/acp/acp-agent.ts
-index 834930b02b..f8ad78e8ae 100644
+index b7b3d16..f359c7b 100644
 --- a/packages/coding-agent/src/modes/acp/acp-agent.ts
 +++ b/packages/coding-agent/src/modes/acp/acp-agent.ts
-@@ -749,6 +749,7 @@ export function createAcpExtensionUiContext(
+@@ -751,6 +751,7 @@ export function createAcpExtensionUiContext(
  		},
  		onTerminalInput: () => () => {},
  		setStatus: () => {},
@@ -159,7 +159,7 @@ index 834930b02b..f8ad78e8ae 100644
  		setWorkingMessage: () => {},
  		setWidget: () => {},
  		setFooter: () => {},
-@@ -3015,6 +3016,7 @@ export class AcpAgent implements Agent {
+@@ -3018,6 +3019,7 @@ export class AcpAgent implements Agent {
  				hasPendingMessages: () => record.session.queuedMessageCount > 0,
  				shutdown: () => {},
  				getContextUsage: () => record.session.getContextUsage(),
@@ -168,7 +168,7 @@ index 834930b02b..f8ad78e8ae 100644
  				runEphemeralTurn: args => record.session.runEphemeralTurn(args),
  				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
 diff --git a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
-index e05570fe7f..8976c185b2 100644
+index a007238..14efd15 100644
 --- a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
 @@ -160,6 +160,7 @@ export class ExtensionUiController {
@@ -179,9 +179,9 @@ index e05570fe7f..8976c185b2 100644
  			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
  			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
  			setTitle: title => setExtensionTerminalTitle(title),
-@@ -252,6 +253,10 @@ export class ExtensionUiController {
- 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
+@@ -253,6 +254,10 @@ export class ExtensionUiController {
  			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
+ 			sessionModes: this.ctx.sessionModes,
  			getContextUsage: () => this.ctx.session.getContextUsage(),
 +			getStatusLineMetrics: () => ({
 +				...this.ctx.session.getStatusLineMetrics(),
@@ -190,9 +190,9 @@ index e05570fe7f..8976c185b2 100644
  			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
  			getSystemPrompt: () => this.ctx.session.systemPrompt,
  			runEphemeralTurn: args => this.ctx.session.runEphemeralTurn(args),
-@@ -483,6 +488,10 @@ export class ExtensionUiController {
- 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
+@@ -485,6 +490,10 @@ export class ExtensionUiController {
  			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
+ 			sessionModes: this.ctx.sessionModes,
  			getContextUsage: () => this.ctx.session.getContextUsage(),
 +			getStatusLineMetrics: () => ({
 +				...this.ctx.session.getStatusLineMetrics(),
@@ -202,10 +202,10 @@ index e05570fe7f..8976c185b2 100644
  			getSystemPrompt: () => this.ctx.session.systemPrompt,
  			runEphemeralTurn: args => this.ctx.session.runEphemeralTurn(args),
 diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-index ef2d73db95..406219ab10 100644
+index f5e63e6..b15fc16 100644
 --- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
 +++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
-@@ -1506,6 +1506,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions
+@@ -1588,6 +1588,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions
  			} as RpcExtensionUIRequest);
  		}
  
@@ -218,7 +218,7 @@ index ef2d73db95..406219ab10 100644
  			// Not supported in RPC mode
  		}
 diff --git a/packages/coding-agent/src/modes/runtime-init.ts b/packages/coding-agent/src/modes/runtime-init.ts
-index edf58307c8..e42e7f085c 100644
+index edf5830..e42e7f0 100644
 --- a/packages/coding-agent/src/modes/runtime-init.ts
 +++ b/packages/coding-agent/src/modes/runtime-init.ts
 @@ -145,6 +145,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
@@ -230,7 +230,7 @@ index edf58307c8..e42e7f085c 100644
  			runEphemeralTurn: args => session.runEphemeralTurn(args),
  			compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
 diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
-index 208af45823..58292c5bfc 100644
+index 208af45..58292c5 100644
 --- a/packages/coding-agent/src/modes/status-line-host.ts
 +++ b/packages/coding-agent/src/modes/status-line-host.ts
 @@ -30,7 +30,7 @@ import { cfgGoalStatusInFooter } from "../goals/settings";
@@ -251,10 +251,10 @@ index 208af45823..58292c5bfc 100644
  	lookupPullRequest: cwd =>
  		github.run(cwd, ["pr", "view", "--json", "number,url"], AbortSignal.timeout(GH_COMMAND_TIMEOUT_MS)),
 diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
-index cb90096e48..b1a4c65e9e 100644
+index 33d2447..8610806 100644
 --- a/packages/coding-agent/src/session/agent-session.ts
 +++ b/packages/coding-agent/src/session/agent-session.ts
-@@ -162,7 +162,8 @@ import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } fr
+@@ -166,7 +166,8 @@ import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } fr
  import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
  import { ManagedTimers } from "../extensibility/extensions/managed-timers";
  import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
@@ -263,8 +263,8 @@ index cb90096e48..b1a4c65e9e 100644
 +import { getSessionCompactionBudget } from "./context-usage-runtime";
  import type { CustomCommandContext } from "../extensibility/custom-commands/types";
  import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
- import type { Skill, SkillWarning } from "../extensibility/skills";
-@@ -638,6 +639,7 @@ const noOpUIContext: ExtensionUIContext = {
+ import {
+@@ -683,6 +684,7 @@ const noOpUIContext: ExtensionUIContext = {
  	notify: () => {},
  	onTerminalInput: () => () => {},
  	setStatus: () => {},
@@ -272,7 +272,7 @@ index cb90096e48..b1a4c65e9e 100644
  	setWorkingMessage: () => {},
  	setWidget: () => {},
  	setTitle: () => {},
-@@ -8700,6 +8702,7 @@ export class AgentSession implements SettingsScope {
+@@ -9058,6 +9060,7 @@ export class AgentSession implements SettingsScope {
  			getPendingPlanReview: () => undefined,
  			openPlanReview: async () => false,
  			getContextUsage: () => this.getContextUsage(),
@@ -280,7 +280,7 @@ index cb90096e48..b1a4c65e9e 100644
  			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
  			waitForIdle: () => this.waitForIdle(),
  			newSession: async options => {
-@@ -13515,6 +13518,16 @@ export class AgentSession implements SettingsScope {
+@@ -14081,6 +14084,16 @@ export class AgentSession implements SettingsScope {
  		return this.#stats.getContextUsage(options);
  	}
  
@@ -297,7 +297,7 @@ index cb90096e48..b1a4c65e9e 100644
  	/**
  	 * Monotonic counter that changes whenever the in-flight pending context
  	 * snapshot is set or cleared. Status-line context memoization keys on this so
-@@ -13602,11 +13615,19 @@ export class AgentSession implements SettingsScope {
+@@ -14168,11 +14181,19 @@ export class AgentSession implements SettingsScope {
  	 * credential. Never throws for business outcomes — inspect `code`.
  	 */
  	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
@@ -319,7 +319,7 @@ index cb90096e48..b1a4c65e9e 100644
  
  	/**
 diff --git a/packages/coding-agent/src/session/context-usage-runtime.ts b/packages/coding-agent/src/session/context-usage-runtime.ts
-index bcb2b2bcd8..09108dd8e0 100644
+index bcb2b2b..09108dd 100644
 --- a/packages/coding-agent/src/session/context-usage-runtime.ts
 +++ b/packages/coding-agent/src/session/context-usage-runtime.ts
 @@ -7,6 +7,7 @@ import {
@@ -354,7 +354,7 @@ index bcb2b2bcd8..09108dd8e0 100644
  export function getSessionCompactionBoundaries(
  	settings: ScopeLike,
 diff --git a/packages/coding-agent/test/codex-auto-reset-integration.test.ts b/packages/coding-agent/test/codex-auto-reset-integration.test.ts
-index c39d88b920..e5e2c23757 100644
+index c39d88b..e5e2c23 100644
 --- a/packages/coding-agent/test/codex-auto-reset-integration.test.ts
 +++ b/packages/coding-agent/test/codex-auto-reset-integration.test.ts
 @@ -16,6 +16,7 @@ import {
@@ -402,7 +402,7 @@ index c39d88b920..e5e2c23757 100644
  		const account = {
  			accountId: "acct-a",
 diff --git a/packages/coding-agent/test/context-consolidation.test.ts b/packages/coding-agent/test/context-consolidation.test.ts
-index 902f899524..f0589e0ef5 100644
+index 902f899..f0589e0 100644
 --- a/packages/coding-agent/test/context-consolidation.test.ts
 +++ b/packages/coding-agent/test/context-consolidation.test.ts
 @@ -106,6 +106,43 @@ describe("Context usage consolidation", () => {
@@ -450,7 +450,7 @@ index 902f899524..f0589e0ef5 100644
  		const tempDir = TempDir.createSync("@branch-local-");
  		const { session, sessionManager, agent } = createSession(tempDir);
 diff --git a/packages/coding-agent/test/extensions-runner.test.ts b/packages/coding-agent/test/extensions-runner.test.ts
-index 5948bc7744..fe436d354b 100644
+index 805ec5c..271068c 100644
 --- a/packages/coding-agent/test/extensions-runner.test.ts
 +++ b/packages/coding-agent/test/extensions-runner.test.ts
 @@ -151,6 +151,11 @@ describe("ExtensionRunner", () => {
@@ -491,7 +491,7 @@ index 5948bc7744..fe436d354b 100644
  	});
  
  	it("uses required context actions when command actions are unavailable", async () => {
-@@ -2542,6 +2566,7 @@ describe("ExtensionRunner", () => {
+@@ -2576,6 +2600,7 @@ describe("ExtensionRunner", () => {
  					notify: () => {},
  					onTerminalInput: () => () => {},
  					setStatus: () => {},
@@ -500,7 +500,7 @@ index 5948bc7744..fe436d354b 100644
  					setWidget: () => {},
  					setFooter: () => {},
 diff --git a/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts b/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
-index 30c9187088..275a94ccb0 100644
+index 52bbdcb..9b31657 100644
 --- a/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
 +++ b/packages/coding-agent/test/modes/controllers/extension-ui-controller.test.ts
 @@ -7,6 +7,8 @@ import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../sr
@@ -570,7 +570,7 @@ index 30c9187088..275a94ccb0 100644
  		{ id: "answer", question: "Choose an answer?", options: [{ label: "Default" }] },
 diff --git a/packages/coding-agent/test/status-line-metrics.test.ts b/packages/coding-agent/test/status-line-metrics.test.ts
 new file mode 100644
-index 0000000000..1c1f6bccf8
+index 0000000..1c1f6bc
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-metrics.test.ts
 @@ -0,0 +1,47 @@
@@ -622,7 +622,7 @@ index 0000000000..1c1f6bccf8
 +	});
 +});
 diff --git a/packages/coding-agent/test/status-line-usage-refresh.test.ts b/packages/coding-agent/test/status-line-usage-refresh.test.ts
-index 95f3b617c3..2980bf7d9e 100644
+index 95f3b61..2980bf7 100644
 --- a/packages/coding-agent/test/status-line-usage-refresh.test.ts
 +++ b/packages/coding-agent/test/status-line-usage-refresh.test.ts
 @@ -173,6 +173,152 @@ describe("StatusLineComponent usage refresh", () => {
@@ -779,7 +779,7 @@ index 95f3b617c3..2980bf7d9e 100644
  		let calls = 0;
  		const component = new StatusLineComponent(
 diff --git a/packages/coding-agent/test/tools/approval-cached-mode.test.ts b/packages/coding-agent/test/tools/approval-cached-mode.test.ts
-index bcad4f6f37..2fc37b4844 100644
+index bcad4f6..2fc37b4 100644
 --- a/packages/coding-agent/test/tools/approval-cached-mode.test.ts
 +++ b/packages/coding-agent/test/tools/approval-cached-mode.test.ts
 @@ -336,6 +336,7 @@ describe("always-ask-cached wrapper cycle", () => {
@@ -791,7 +791,7 @@ index bcad4f6f37..2fc37b4844 100644
  				setWidget: () => {},
  				setFooter: () => {},
 diff --git a/packages/tui/src/status-line/component.ts b/packages/tui/src/status-line/component.ts
-index 3fdc4c9155..d2efefb28c 100644
+index 4b59968..9cbe1b0 100644
 --- a/packages/tui/src/status-line/component.ts
 +++ b/packages/tui/src/status-line/component.ts
 @@ -58,6 +58,7 @@ import type {
@@ -822,7 +822,7 @@ index 3fdc4c9155..d2efefb28c 100644
  	#usageFetchedAt = 0;
  	#usageInFlight = false;
  	#usageStartTimer: Timer | null = null;
-@@ -1240,6 +1242,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -1242,6 +1244,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		this.#onResetExpiryNotice = handler;
  	}
  
@@ -834,7 +834,7 @@ index 3fdc4c9155..d2efefb28c 100644
  	setHookStatus(key: string, text: string | undefined): void {
  		if (text === undefined) {
  			if (!this.#hookStatuses.delete(key)) return;
-@@ -1516,6 +1523,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -1518,6 +1525,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  	#invalidateSessionCaches(): void {
  		this.#clearUsageStartTimer();
  		this.#cachedUsage = null;
@@ -842,7 +842,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		this.#usageFetchedAt = 0;
  		this.#usageInFlight = false;
  		this.#contextUsageCache = undefined;
-@@ -2033,6 +2041,42 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2035,6 +2043,42 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
  	}
  
@@ -885,7 +885,7 @@ index 3fdc4c9155..d2efefb28c 100644
  	/**
  	 * Startup redraws only arm a short-delayed task; timeout releases the render
  	 * cadence while a late successful fetch can still refresh the cached segment.
-@@ -2041,6 +2085,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2043,6 +2087,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		if (this.#disposed) return;
  		const now = Date.now();
  		const session = this.session;
@@ -893,7 +893,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		const usageContextKey = this.#getUsageContextKey(session);
  		if (this.#cachedUsageContextKey !== usageContextKey) {
  			this.#cachedUsage = null;
-@@ -2063,6 +2108,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2065,6 +2110,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			return;
  		}
  		const sequence = ++this.#usageRefreshSequence;
@@ -901,7 +901,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		const signal = AbortSignal.timeout(STATUS_USAGE_REFRESH_TIMEOUT_MS);
  		let reportsPromise: Promise<unknown> | undefined;
  		try {
-@@ -2071,23 +2117,33 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2073,23 +2119,33 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  				session,
  				await this.#raceUsageRefreshWithSignal(reportsPromise, signal),
  				sequence,
@@ -938,7 +938,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		const activeProvider = session.state.model?.provider ?? session.model?.provider;
  		const activeModelId = session.state.model?.id ?? session.model?.id;
  		const activeIdentity = activeProvider ? this.host.activeAccount(session, activeProvider) : undefined;
-@@ -2100,6 +2156,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2102,6 +2158,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			activeProvider === "openai-codex" ? this.#normalizeCodexResetSnapshot(reports, activeIdentity) : null;
  		const usageChanged = this.#cachedUsage !== normalized;
  		this.#cachedUsage = normalized;
@@ -946,7 +946,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		this.#usageFetchedAt = Date.now();
  		// Usage fetch is async; without a repaint the top border stays blank until
  		// some unrelated event (git resolve, keystroke, …) rebuilds it.
-@@ -2144,10 +2201,15 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2146,10 +2203,15 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		this.#onResetExpiryNotice(notice);
  	}
  
@@ -964,7 +964,7 @@ index 3fdc4c9155..d2efefb28c 100644
  			})
  			.catch(() => {
  				if (this.#disposed || this.session !== session || sequence < this.#latestAppliedUsageRefreshSequence) {
-@@ -2240,9 +2302,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2242,9 +2304,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		context: { provider?: string; modelId?: string; identity?: OAuthAccountIdentity },
  	): {
  		tier?: string;
@@ -976,7 +976,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		monthly?: { percent: number; resetHours?: number };
  		resetCredits?: {
  			bankedCount: number;
-@@ -2394,9 +2456,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2396,9 +2458,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  				: undefined;
  		if (!selectedGroup) return resetCredits ? { resetCredits } : null;
  
@@ -988,7 +988,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		let monthly: { percent: number; resetHours?: number } | undefined;
  		let monthlyPriority = Number.POSITIVE_INFINITY;
  		const cursorMonthlyPriority = (limitId: unknown): number => {
-@@ -2411,6 +2473,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2413,6 +2475,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			if (candidate.windowClass === "5h" && !fiveHour) {
  				fiveHour = {
  					percent: candidate.fraction * 100,
@@ -996,7 +996,7 @@ index 3fdc4c9155..d2efefb28c 100644
  					resetMinutes:
  						typeof candidate.resetsAt === "number"
  							? Math.max(0, Math.round((candidate.resetsAt - now) / 60_000))
-@@ -2429,6 +2492,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2431,6 +2494,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			if (candidate.windowClass === "7d" && !sevenDay) {
  				sevenDay = {
  					percent: candidate.fraction * 100,
@@ -1004,7 +1004,7 @@ index 3fdc4c9155..d2efefb28c 100644
  					resetHours:
  						typeof candidate.resetsAt === "number"
  							? Math.max(0, Math.round((candidate.resetsAt - now) / 3_600_000))
-@@ -2908,6 +2972,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2910,6 +2974,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  	}
  
  	#buildStatusLine(width: number, layout: StatusLineLayout = "box", previewTitle?: string): CachedStatusLine {
@@ -1013,7 +1013,7 @@ index 3fdc4c9155..d2efefb28c 100644
  		const externalInputs = this.#externalInputsProbe;
  		this.#readStatusLineExternalInputs(externalInputs);
 diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
-index 5418734893..63a4862576 100644
+index 5418734..63a4862 100644
 --- a/packages/tui/src/status-line/host.ts
 +++ b/packages/tui/src/status-line/host.ts
 @@ -97,6 +97,8 @@ export interface StatusLineHost<TSession extends StatusLineSession = StatusLineS
@@ -1026,7 +1026,7 @@ index 5418734893..63a4862576 100644
  	lookupPullRequest(cwd: string): Promise<{ stdout: string; exitCode: number }>;
  	calculateTokensPerSecond(messages: readonly AgentMessage[], isStreaming: boolean): number | null;
 diff --git a/packages/tui/src/status-line/types.ts b/packages/tui/src/status-line/types.ts
-index 47917bfb72..ceab87749d 100644
+index 47917bf..ceab877 100644
 --- a/packages/tui/src/status-line/types.ts
 +++ b/packages/tui/src/status-line/types.ts
 @@ -16,6 +16,33 @@ export interface ContextUsage {

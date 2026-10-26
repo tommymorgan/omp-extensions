@@ -1,3 +1,4 @@
+import { wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { z } from "zod";
 
 const quotaWindow = z.object({
@@ -121,4 +122,57 @@ export function upperMetrics(
 ): string {
   const { rate, fields } = upperMetricFields(metrics, cache, used, now);
   return [rate, ...fields.map((field) => field.text)].join("  ·  ");
+}
+
+/** Pack whole facts before wrapping a field that is itself wider than the terminal. */
+function wrapFields(fields: readonly string[], width: number, separator: string): string[] {
+  const rows: string[] = [];
+  let row = "";
+  for (const field of fields) {
+    if (!field) continue;
+    const next = row ? row + separator + field : field;
+    if (Bun.stringWidth(next) <= width) row = next;
+    else {
+      if (row) rows.push(row);
+      const wrapped = wrapTextWithAnsi(field, width);
+      rows.push(...wrapped.slice(0, -1));
+      row = wrapped.at(-1) ?? "";
+    }
+  }
+  if (row) rows.push(row);
+  return rows;
+}
+
+/** Sharing a row with mail must not narrow an otherwise fitting fact into fragments. */
+export function lowerRail(
+  prefix: readonly string[],
+  repository: readonly string[],
+  mail: string | undefined,
+  width: number,
+  separator: string,
+): string[] {
+  const columns = Math.max(1, width);
+  const fields = [...prefix, ...repository].filter(Boolean);
+  if (!mail) return wrapFields(fields, columns, separator);
+  const mailWidth = Bun.stringWidth(mail);
+  const leftWidth = columns - Bun.stringWidth(separator) - mailWidth;
+  let left = fields.join(separator);
+  let preceding: readonly string[] = [];
+  if (Bun.stringWidth(left) > leftWidth) {
+    left = repository.filter(Boolean).join(separator);
+    preceding = prefix;
+    if (!left || Bun.stringWidth(left) > leftWidth) {
+      left = fields.at(-1) ?? "";
+      preceding = fields.slice(0, -1);
+    }
+  }
+  if (left && Bun.stringWidth(left) <= leftWidth)
+    return [
+      ...wrapFields(preceding, columns, separator),
+      left + separator + " ".repeat(leftWidth - Bun.stringWidth(left)) + mail,
+    ];
+  const rows = wrapFields(fields, columns, separator);
+  if (mailWidth <= columns) rows.push(" ".repeat(columns - mailWidth) + mail);
+  else rows.push(...wrapTextWithAnsi(mail, columns));
+  return rows;
 }
