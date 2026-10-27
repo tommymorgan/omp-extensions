@@ -44,6 +44,16 @@
         "@oh-my-pi/pi-coding-agent": "^18.10.4",
       },
     },
+    "packages/palette-commands": {
+      "name": "tommy-omp-palette-commands",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@oh-my-pi/pi-coding-agent": "18.10.4",
+      },
+      "peerDependencies": {
+        "@oh-my-pi/pi-coding-agent": "^18.10.4",
+      },
+    },
   },
   "packages": {
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
@@ -317,6 +327,8 @@
     "tommy-omp-editor": ["tommy-omp-editor@workspace:packages/editor"],
 
     "tommy-omp-kizn-guidance": ["tommy-omp-kizn-guidance@workspace:packages/kizn-guidance"],
+
+    "tommy-omp-palette-commands": ["tommy-omp-palette-commands@workspace:packages/palette-commands"],
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
