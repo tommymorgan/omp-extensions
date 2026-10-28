@@ -37,6 +37,7 @@ export interface PublishPayload {
   pane: string | null;
   pid: number;
   commands: CommandInventoryEntry[];
+  socket_path?: string;
 }
 
 export interface RemovePayload {
@@ -99,8 +100,8 @@ export async function runCriticalSection(
   return { ran: exitCode === 0, exitCode, stdout, stderr };
 }
 
-function aggregate(stateDir: string, pluginDir?: string): void {
-  const outcome = writeAggregatedManifest({
+async function aggregate(stateDir: string, pluginDir?: string): Promise<void> {
+  const outcome = await writeAggregatedManifest({
     stateDir,
     ...(pluginDir === undefined ? {} : { pluginDir }),
     bridgePath: join(import.meta.dir, 'bridge.ts'),
@@ -131,11 +132,16 @@ if (import.meta.main) {
   }
   mkdirSync(stateDir, { recursive: true });
   if (mode === 'aggregate') {
-    aggregate(stateDir, pluginDir);
+    await aggregate(stateDir, pluginDir);
   } else if (mode === 'publish') {
     const payload = payloadFromStdin();
     const ids = parseIds(payload);
     const commands = payload.commands;
+    const socketPath = payload.socket_path;
+    if (socketPath !== undefined && typeof socketPath !== 'string') {
+      process.stderr.write('palette-commands: publish socket_path must be a string\n');
+      process.exit(64);
+    }
     if (ids === null || !Array.isArray(commands)) {
       process.stderr.write('palette-commands: publish payload must be {session, pane, pid, commands}\n');
       process.exit(64);
@@ -145,8 +151,9 @@ if (import.meta.main) {
       paneId: ids.pane,
       pidOf: () => ids.pid,
       commands: commands as CommandInventoryEntry[],
+      socketPath,
     });
-    aggregate(stateDir, pluginDir);
+    await aggregate(stateDir, pluginDir);
   } else if (mode === 'remove') {
     const payload = payloadFromStdin();
     const ids = parseIds(payload);
@@ -155,7 +162,7 @@ if (import.meta.main) {
       process.exit(64);
     }
     removeInstanceState(stateDir, { sessionId: ids.session, paneId: ids.pane, pid: ids.pid });
-    aggregate(stateDir, pluginDir);
+    await aggregate(stateDir, pluginDir);
   } else {
     process.stderr.write(`palette-commands: unknown critical-section mode ${JSON.stringify(mode)}\n`);
     process.exit(64);

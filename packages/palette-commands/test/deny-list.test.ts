@@ -32,7 +32,7 @@ function publish(commands: Array<{ name: string; description?: string; input_hin
 }
 
 describe('deny-list enforcement at aggregation (Task 4.1)', () => {
-  it('default-denylisted quit and delete never publish; others do', () => {
+  it('default-denylisted quit and delete never publish; others do', async () => {
     const dir = publish([
       { name: 'quit', description: 'Quit omp' },
       { name: 'delete', description: 'Delete things' },
@@ -40,7 +40,7 @@ describe('deny-list enforcement at aggregation (Task 4.1)', () => {
     ]);
     const pluginDir = join(dir, 'plugin');
 
-    writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const manifest = readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8');
     expect(manifest).not.toContain('omp: quit');
@@ -55,17 +55,17 @@ describe('deny-list enforcement at aggregation (Task 4.1)', () => {
     expect(aggregateCommands(dir).map((command) => command.name)).toEqual(['restart']);
   });
 
-  it('deny-list.txt additions are honored (with comments/blank lines); deletion restores the name', () => {
+  it('deny-list.txt additions are honored (with comments/blank lines); deletion restores the name', async () => {
     const dir = publish([{ name: 'tan', description: 'Work log' }, { name: 'restart', description: 'Restart' }]);
     const pluginDir = join(dir, 'plugin');
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(join(dir, 'deny-list.txt'), '# operator additions\ntan\n\n');
 
-    writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
     expect(aggregateCommands(dir).map((command) => command.name)).toEqual(['restart']);
 
     rmSync(join(dir, 'deny-list.txt'));
-    writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir: dir, pluginDir, bridgePath: '/opt/bridge.ts' });
     expect(aggregateCommands(dir).map((command) => command.name)).toEqual(['restart', 'tan']);
   });
 });

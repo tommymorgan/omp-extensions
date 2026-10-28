@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readArgumentCapability } from './argument-capability.ts';
 import { readDenyList } from './deny-list.ts';
 import { FLOCK_CONFLICT_EXIT, runCriticalSection } from './critical.ts';
 import { DISPATCH_MAP_FILENAME, type DispatchAction } from './dispatch-map.ts';
@@ -97,12 +98,11 @@ export function actionDescription(command: CommandInventoryEntry): string | unde
   return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
-/** Unions the command inventories of all LIVE instances across all sessions, sorted by name. */
-export function aggregateCommands(stateDir: string): CommandInventoryEntry[] {
+/** Reads and sweeps the live registry once for both legacy union and capability publication. */
+function liveEntries(stateDir: string): InstanceRegistryEntry[] {
   const registryDir = join(stateDir, REGISTRY_DIR_NAME);
   if (!existsSync(registryDir)) return [];
-  const denied = readDenyList(stateDir);
-  const byName = new Map<string, CommandInventoryEntry>();
+  const entries: InstanceRegistryEntry[] = [];
   for (const session of readdirSync(registryDir).sort()) {
     const sessionDir = join(registryDir, session);
     // Stray non-directory entries (hand-placed files, pre-upgrade
@@ -131,28 +131,49 @@ export function aggregateCommands(stateDir: string): CommandInventoryEntry[] {
         unlinkSync(join(sessionDir, file));
         continue;
       }
-      for (const raw of entry.commands) {
-        if (
-          raw === null ||
-          typeof raw !== 'object' ||
-          typeof (raw as CommandInventoryEntry).name !== 'string' ||
-          (raw as CommandInventoryEntry).name.length === 0
-        ) {
-          continue;
-        }
-        const command = raw as CommandInventoryEntry;
-        if (denied.has(command.name)) continue; // Task 4.1: deny-listed names never publish
-        const existing = byName.get(command.name);
-        if (
-          existing === undefined ||
-          (existing.description === undefined && command.description !== undefined)
-        ) {
-          byName.set(command.name, command);
-        }
+      // The containing session is part of the identity, not merely a grouping hint.
+      if (entry.session_id !== session) continue;
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+function unionCommands(entries: InstanceRegistryEntry[], stateDir: string): CommandInventoryEntry[] {
+  const denied = readDenyList(stateDir);
+  const byName = new Map<string, CommandInventoryEntry>();
+  for (const entry of entries) {
+    for (const raw of entry.commands ?? []) {
+      if (raw === null || typeof raw !== 'object' || typeof raw.name !== 'string' || raw.name.length === 0) continue;
+      if (denied.has(raw.name)) continue;
+      const existing = byName.get(raw.name);
+      if (existing === undefined || (existing.description === undefined && raw.description !== undefined)) {
+        byName.set(raw.name, raw);
       }
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Unions the command inventories of all LIVE instances across all sessions, sorted by name. */
+export function aggregateCommands(stateDir: string): CommandInventoryEntry[] {
+  return unionCommands(liveEntries(stateDir), stateDir);
+}
+
+async function capableEntries(entries: InstanceRegistryEntry[]): Promise<InstanceRegistryEntry[]> {
+  const probes = new Map<string, Promise<{ bootId: string } | null>>();
+  const capable = await Promise.all(entries.map(async (entry) => {
+    if (typeof entry.socket_path !== 'string') return false;
+    const key = JSON.stringify([entry.session_id, entry.socket_path]);
+    let probe = probes.get(key);
+    if (probe === undefined) {
+      probe = readArgumentCapability(entry.socket_path, entry.session_id);
+      probes.set(key, probe);
+    }
+    return (await probe) !== null;
+  }));
+  // A process may have exited while its Core capability request was in flight.
+  return entries.filter((entry, index) => capable[index] && isProcessAlive(entry.pid, entry.proc_start_ticks));
 }
 
 export interface AggregateOptions {
@@ -169,12 +190,15 @@ export interface AggregatedManifest {
 }
 
 /** Aggregates live instances and publishes ONE coherent generation: dispatch.json (id → original name) first, then the trailboss manifest that names those ids. */
-export function writeAggregatedManifest(options: AggregateOptions): AggregatedManifest {
+export async function writeAggregatedManifest(options: AggregateOptions): Promise<AggregatedManifest> {
   const pluginDir =
     options.pluginDir ??
     process.env.PALETTE_COMMANDS_PLUGIN_DIR ??
     join(homedir(), '.local', 'state', 'omp-extensions', 'palette-commands', 'plugin');
-  const commands = aggregateCommands(options.stateDir);
+  const entries = liveEntries(options.stateDir);
+  const supported = await capableEntries(entries);
+  const commands = unionCommands(entries.filter((entry) => isProcessAlive(entry.pid, entry.proc_start_ticks)), options.stateDir);
+  const argumentCommands = new Map(unionCommands(supported, options.stateDir).map((command) => [command.name, command]));
   // Null prototype so a sanitized id like `__proto__` becomes an own entry
   // instead of mutating the map's prototype; JSON.stringify serializes own
   // entries either way.
@@ -195,10 +219,15 @@ export function writeAggregatedManifest(options: AggregateOptions): AggregatedMa
     }
     usedIds.add(id);
     dispatchMap[id] = { name: command.name };
+    const argumentCommand = argumentCommands.get(command.name);
     return {
       id,
       title: `omp: ${command.name}`,
       description: actionDescription(command),
+      ...(argumentCommand === undefined ? {} : {
+        argument_input: { kind: 'raw_tail' as const },
+        ...(typeof argumentCommand.input_hint === 'string' ? { argument_hint: argumentCommand.input_hint } : {}),
+      }),
     };
   });
   mkdirSync(pluginDir, { recursive: true });

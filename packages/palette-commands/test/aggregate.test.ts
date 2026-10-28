@@ -70,7 +70,7 @@ describe('aggregateCommands', () => {
 });
 
 describe('writeAggregatedManifest', () => {
-  it('emits one action per unique live command with the shared bridge argv and an id↔name map', () => {
+  it('emits one action per unique live command with the shared bridge argv and an id↔name map', async () => {
     const { stateDir, pluginDir } = fresh();
     writeInstanceRegistry(stateDir, {
       sessionId: 'daily',
@@ -85,7 +85,7 @@ describe('writeAggregatedManifest', () => {
       commands: [{ name: 'model set', description: 'Pick a model' }],
     });
 
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const manifestPath = join(pluginDir, 'trailboss-plugin.toml');
     expect(existsSync(manifestPath)).toBe(true);
@@ -106,9 +106,9 @@ describe('writeAggregatedManifest', () => {
     });
   });
 
-  it('zero live instances → valid manifest with zero actions', () => {
+  it('zero live instances → valid manifest with zero actions', async () => {
     const { stateDir, pluginDir } = fresh();
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
     const parsed = Bun.TOML.parse(
       readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8'),
     ) as Record<string, unknown>;
@@ -118,7 +118,7 @@ describe('writeAggregatedManifest', () => {
 });
 
 describe('argument-requiring commands publish (plan Task 2.1, scenario 2)', () => {
-  it("an input_hint command's action carries the usage hint in its description", () => {
+  it("an input_hint command's action carries the usage hint in its description", async () => {
     const { stateDir, pluginDir } = fresh();
     writeInstanceRegistry(stateDir, {
       sessionId: 'daily',
@@ -127,7 +127,7 @@ describe('argument-requiring commands publish (plan Task 2.1, scenario 2)', () =
       commands: [{ name: 'tan', description: "Log today's work", input_hint: '<work>' }],
     });
 
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const parsed = Bun.TOML.parse(
       readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8'),
@@ -140,7 +140,7 @@ describe('argument-requiring commands publish (plan Task 2.1, scenario 2)', () =
 });
 
 describe('review fix pass — collisions, corrupt entries, surrogate-safe truncation', () => {
-  it('names that sanitize identically get distinct STABLE hash ids; every mapping preserved', () => {
+  it('names that sanitize identically get distinct STABLE hash ids; every mapping preserved', async () => {
     const { stateDir, pluginDir } = fresh();
     writeInstanceRegistry(stateDir, {
       sessionId: 'daily',
@@ -153,7 +153,7 @@ describe('review fix pass — collisions, corrupt entries, surrogate-safe trunca
       ],
     });
 
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const parsed = Bun.TOML.parse(
       readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8'),
@@ -197,7 +197,7 @@ describe('review fix pass — collisions, corrupt entries, surrogate-safe trunca
     expect(commands.map((command) => command.name)).toEqual(['healthy']);
   });
 
-  it('description truncation never splits a surrogate pair', () => {
+  it('description truncation never splits a surrogate pair', async () => {
     const { stateDir, pluginDir } = fresh();
     const longDescription = `${'x'.repeat(189)}🌱`;
     writeInstanceRegistry(stateDir, {
@@ -207,7 +207,7 @@ describe('review fix pass — collisions, corrupt entries, surrogate-safe trunca
       commands: [{ name: 'emoji', description: longDescription }],
     });
 
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const parsed = Bun.TOML.parse(
       readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8'),
@@ -291,7 +291,7 @@ describe('delivery review — recycled pids, stray files, suffix budget', () => 
     expect(commands.map((command) => command.name)).toEqual(['alive']);
   });
 
-  it('collision suffixes stay inside the 120-char action-id budget (finding 9)', () => {
+  it('collision suffixes stay inside the 120-char action-id budget (finding 9)', async () => {
     const { stateDir, pluginDir } = fresh();
     const longName = 'a'.repeat(130);
     writeInstanceRegistry(stateDir, {
@@ -304,7 +304,7 @@ describe('delivery review — recycled pids, stray files, suffix budget', () => 
       ],
     });
 
-    writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
+    await writeAggregatedManifest({ stateDir, pluginDir, bridgePath: '/opt/bridge.ts' });
 
     const parsed = Bun.TOML.parse(
       readFileSync(join(pluginDir, 'trailboss-plugin.toml'), 'utf8'),

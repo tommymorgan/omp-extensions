@@ -1,4 +1,5 @@
 import { requiresArgument } from './aggregate.ts';
+import { readArgumentCapability } from './argument-capability.ts';
 import type { InstanceRegistryEntry } from './registry.ts';
 
 /**
@@ -31,6 +32,10 @@ export interface DispatchTarget {
   session: string | null;
   /** The palette-selected pane from the invocation context. */
   paneId: string | null;
+  /** Explicit raw tail; undefined preserves legacy prefill behavior, '' executes. */
+  rawArguments?: string;
+  /** Exact invoking Core socket; required for explicit argument dispatch. */
+  socketPath?: string;
 }
 
 export interface DispatchDeps {
@@ -44,6 +49,7 @@ export interface DispatchDeps {
   readPaneRecent(paneId: string): Promise<string>;
   /** Injectable wait (defaults to real setTimeout) so tests run without real delays. */
   wait?: (ms: number) => Promise<void>;
+  readArgumentCapability?: typeof readArgumentCapability;
 }
 
 export interface DispatchOutcome {
@@ -129,6 +135,10 @@ export async function dispatchSlashCommand(
   target: DispatchTarget,
   deps: DispatchDeps,
 ): Promise<DispatchOutcome> {
+  if (target.rawArguments !== undefined
+    && (typeof target.rawArguments !== 'string' || /[\u0000-\u001f\u007f-\u009f]/u.test(target.rawArguments))) {
+    return { code: 11, error: 'palette-commands: arguments must be a string without terminal control characters; refusing to dispatch' };
+  }
   if (target.paneId === null || target.paneId.length === 0) {
     return { code: 3, error: 'palette-commands: invocation context names no pane; refusing to dispatch' };
   }
@@ -167,8 +177,34 @@ export async function dispatchSlashCommand(
   // R7 (round 2): prefill mode comes from THIS instance's own command
   // entry — the fleet-wide union never overrides the selected command's
   // argument contract.
-  const prefill = requiresArgument(command);
+  const prefill = target.rawArguments === undefined && requiresArgument(command);
+  const session = target.session;
+  const paneId = target.paneId;
+  const socketPath = target.socketPath;
+  // Snapshot by value: registry refreshes or replacement during async work
+  // must not silently change the selected process or command inventory.
+  const entrySnapshot = JSON.stringify(entry);
+  const targetStillCurrent = (): boolean => {
+    const current = deps.entryFor(session, paneId);
+    return current !== null && JSON.stringify(current) === entrySnapshot
+      && deps.isProcessAlive(current.pid, current.proc_start_ticks);
+  };
   try {
+    const probe = deps.readArgumentCapability ?? readArgumentCapability;
+    let bootId: string | undefined;
+    if (target.rawArguments !== undefined) {
+      if (socketPath === undefined || entry.socket_path !== socketPath) {
+        return { code: 12, error: 'palette-commands: explicit arguments require the registered invoking Core socket; refusing to dispatch' };
+      }
+      const capability = await probe(socketPath, session);
+      if (capability === null) {
+        return { code: 12, error: 'palette-commands: Core argument capability unavailable; refusing to dispatch' };
+      }
+      bootId = capability.bootId;
+      if (!targetStillCurrent()) {
+        return { code: 5, error: 'palette-commands: selected instance registry changed during capability probe; refusing to dispatch' };
+      }
+    }
     // Clear any unsent draft first (finding 4 + R4): a keys-only
     // send_input that consumes draft lines from any cursor position, then
     // the command text into a composer whose draft (within the
@@ -191,9 +227,18 @@ export async function dispatchSlashCommand(
         error: `palette-commands: composer not verifiably empty for pane ${target.paneId} (residue: ${residue}); refusing dispatch`,
       };
     }
+    if (target.rawArguments !== undefined && socketPath !== undefined) {
+      const capability = await probe(socketPath, session);
+      if (capability === null || capability.bootId !== bootId) {
+        return { code: 12, error: 'palette-commands: Core argument capability or boot changed before submission; refusing to dispatch' };
+      }
+    }
+    if (!targetStillCurrent()) {
+      return { code: 5, error: 'palette-commands: selected instance registry changed or process expired before submission; refusing to dispatch' };
+    }
     await deps.sendInput(
       target.paneId,
-      prefill ? `/${commandName} ` : `/${commandName}`,
+      prefill ? `/${commandName} ` : `/${commandName}${target.rawArguments ? ` ${target.rawArguments}` : ''}`,
       prefill ? [] : ['Enter'],
     );
   } catch (err) {

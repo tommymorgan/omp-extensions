@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readDispatchMap } from './dispatch-map.ts';
+import type { readArgumentCapability } from './argument-capability.ts';
 import { dispatchSlashCommand } from './dispatch.ts';
 import { isProcessAlive, registryEntryFor, sessionFromSocketPath } from './registry.ts';
 import { sessionRequest } from './session-socket.ts';
@@ -77,6 +78,7 @@ export interface BridgeDispatchOptions {
   sendInput?(paneId: string, text: string, keys: string[]): Promise<void>;
   readPaneRecent?(paneId: string): Promise<string>;
   wait?(ms: number): Promise<void>;
+  readArgumentCapability?: typeof readArgumentCapability;
 }
 
 /** Extracts the palette-selected pane from the invocation context JSON; malformed JSON resolves to null (fail closed downstream). */
@@ -149,7 +151,26 @@ export async function bridgeDispatch(
     // Envelope-only invocation (no action context): nothing to dispatch.
     return 0;
   }
+  let rawArguments: string | undefined;
+  if (env.HERDR_PLUGIN_ARGUMENTS_JSON !== undefined) {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(env.HERDR_PLUGIN_ARGUMENTS_JSON);
+    } catch {
+      io.err('palette-commands: malformed arguments JSON; refusing to dispatch');
+      return 11;
+    }
+    if (typeof decoded !== 'string' || /[\u0000-\u001f\u007f-\u009f]/u.test(decoded)) {
+      io.err('palette-commands: arguments must be a string without terminal control characters; refusing to dispatch');
+      return 11;
+    }
+    rawArguments = decoded;
+  }
   const socketPath = env.PALETTE_TRAILBOSS_SOCKET ?? env.HERDR_SOCKET_PATH ?? null;
+  if (rawArguments !== undefined && (env.HERDR_SOCKET_PATH === undefined || socketPath !== env.HERDR_SOCKET_PATH)) {
+    io.err('palette-commands: explicit arguments require the exact HERDR_SOCKET_PATH; refusing to dispatch');
+    return 12;
+  }
   const pluginDir = env.PALETTE_COMMANDS_PLUGIN_DIR ?? env.HERDR_PLUGIN_ROOT ?? null;
   const stateDir = options.stateDir ?? join(homedir(), '.local', 'state', 'omp-extensions', 'palette-commands');
   const paneId = focusedPaneId(rawContext);
@@ -177,7 +198,7 @@ export async function bridgeDispatch(
   }
   const outcome = await dispatchSlashCommand(
     action.name,
-    { session, paneId },
+    { session, paneId, rawArguments, socketPath: socketPath ?? undefined },
     {
       entryFor: (session, paneId) => registryEntryFor(stateDir, session, paneId),
       isProcessAlive,
@@ -207,6 +228,7 @@ export async function bridgeDispatch(
         return typeof text === 'string' ? text : '';
       },
       wait: options.wait,
+      readArgumentCapability: options.readArgumentCapability,
     },
   );
   if (outcome.error !== undefined) io.err(outcome.error);

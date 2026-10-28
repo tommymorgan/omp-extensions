@@ -60,6 +60,11 @@ export default function paletteCommands(pi: ExtensionAPI): void {
       return;
     }
     const paneId = process.env.HERDR_PANE_ID ?? null;
+    const socketPath = process.env.HERDR_SOCKET_PATH;
+    if (socketPath !== undefined && sessionFromSocketPath(socketPath) !== sessionId) {
+      pi.logger.warn('palette-commands: socket/session identity mismatch; not publishing registry entry');
+      return;
+    }
     ids = { sessionId, paneId };
     const commands = await readInventory(pi);
     pi.logger.debug(
@@ -72,7 +77,7 @@ export default function paletteCommands(pi: ExtensionAPI): void {
     const published = await runLifecycle(
       pi,
       'publish',
-      JSON.stringify({ session: sessionId, pane: paneId, pid: process.pid, commands }),
+      JSON.stringify({ session: sessionId, pane: paneId, pid: process.pid, commands, socket_path: socketPath }),
       5000,
     );
     if (published) {

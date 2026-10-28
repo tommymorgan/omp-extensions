@@ -45,6 +45,8 @@ export interface InstanceRegistryEntry {
   /** /proc/<pid>/stat field 22 (clock ticks since boot): the process-incarnation id. A recycled PID never matches it. */
   proc_start_ticks?: number;
   session_id: string;
+  /** Exact session socket supplied by Trailboss; absent in legacy registrations. */
+  socket_path?: string;
   started_unix_ms: number;
   commands?: CommandInventoryEntry[];
 }
@@ -69,6 +71,7 @@ export interface PublishedInstance {
 export interface InstanceIds {
   sessionId: string;
   paneId: string | null;
+  socketPath?: string;
   /** Test seam: the pid the entry claims; defaults to this process. */
   pidOf?: () => number;
   /** The instance's command inventory (Task 2.1). */
@@ -96,6 +99,9 @@ export function writeInstanceRegistry(
   if (!isValidRegistryKey(key)) {
     throw new Error(`palette-commands: invalid registry entry key ${JSON.stringify(key)}`);
   }
+  if (ids.socketPath !== undefined && sessionFromSocketPath(ids.socketPath) !== ids.sessionId) {
+    throw new Error('palette-commands: registry socket does not match session identity');
+  }
   mkdirSync(join(stateDir, REGISTRY_DIR_NAME, ids.sessionId), { recursive: true });
   const pid = (ids.pidOf ?? ((): number => process.pid))();
   const entry: InstanceRegistryEntry = {
@@ -103,6 +109,7 @@ export function writeInstanceRegistry(
     pid,
     proc_start_ticks: processStartTicks(pid) ?? undefined,
     session_id: ids.sessionId,
+    socket_path: ids.socketPath,
     started_unix_ms: Date.now(),
     commands: ids.commands,
   };

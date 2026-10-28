@@ -526,3 +526,78 @@ describe('runBridgeExecutable prefill transport (Task 3.2 review fix)', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 });
+
+describe('explicit argument environment decoding', () => {
+  it.each([
+    '{broken', '42', 'null', '[]', '{}', 'true',
+    ...Array.from({ length: 32 }, (_, code) => JSON.stringify(`before${String.fromCharCode(code)}after`)),
+    ...Array.from({ length: 33 }, (_, code) => JSON.stringify(`before${String.fromCharCode(127 + code)}after`)),
+  ])('refuses malformed, nonstring or terminal-control arguments before any pane mutation: %j', async (argumentsJson) => {
+    const sent: string[] = [];
+    const errors: string[] = [];
+    const code = await runBridgeExecutable({
+      HERDR_PLUGIN_ACTION_ID: 'tan',
+      HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ pane_id: 'w4:p5' }),
+      HERDR_PLUGIN_ARGUMENTS_JSON: argumentsJson,
+      HERDR_SOCKET_PATH: '/run/trailboss/sessions/smoke/trailboss.sock',
+    }, () => {}, (error) => void errors.push(error), {
+      sendInput: async (_pane, text) => void sent.push(text),
+      readArgumentCapability: async () => { throw new Error('invalid arguments must not probe'); },
+    });
+    expect(code).toBe(11);
+    expect(sent).toEqual([]);
+    expect(errors.join('\n')).toContain('arguments');
+  });
+
+  it.each([undefined, '', '42  "review note" café', '  "雪"  ', '"42"'])('prefills required arguments only when absent, but executes explicit tail %j on the captured pane', async (rawArguments) => {
+    const workDir = mkdtempSync(join(tmpdir(), 'palette-bridge-arguments-'));
+    try {
+      const pluginDir = join(workDir, 'plugin');
+      const stateDir = join(workDir, 'state');
+      const socketPath = '/run/trailboss/sessions/smoke/trailboss.sock';
+      mkdirSync(pluginDir, { recursive: true });
+      writeDispatchMap(pluginDir, { tan: { name: 'tan' } });
+      writeInstanceRegistry(stateDir, {
+        sessionId: 'smoke',
+        paneId: 'w4:p5',
+        socketPath,
+        pidOf: () => process.pid,
+        commands: [{ name: 'tan', input_hint: '<work>' }],
+      });
+      const sent: Array<{ paneId: string; text: string; keys: string[] }> = [];
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const code = await runBridgeExecutable({
+        HERDR_PLUGIN_ACTION_ID: 'tan',
+        HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ pane_id: 'w4:p5', invocation_source: 'plugin_ui' }),
+        HERDR_PLUGIN_ARGUMENTS_JSON: rawArguments === undefined ? undefined : JSON.stringify(rawArguments),
+        HERDR_SOCKET_PATH: socketPath,
+        HERDR_SESSION: 'smoke',
+        PALETTE_COMMANDS_PLUGIN_DIR: pluginDir,
+      }, (line) => void stdout.push(line), (line) => void stderr.push(line), {
+        stateDir,
+        readPaneRecent: async () => CLEAN_PANE_TEXT,
+        wait: async () => {},
+        readArgumentCapability: async () => ({ bootId: 'boot-a' }),
+        sendInput: async (paneId, text, keys) => {
+          sent.push({ paneId, text, keys });
+        },
+      });
+      expect(code).toBe(0);
+      expect(sent).toEqual([
+        { paneId: 'w4:p5', text: '', keys: CLEAR_KEYS },
+        {
+          paneId: 'w4:p5',
+          text: rawArguments === undefined ? '/tan ' : `/tan${rawArguments ? ` ${rawArguments}` : ''}`,
+          keys: rawArguments === undefined ? [] : ['Enter'],
+        },
+      ]);
+      if (rawArguments) {
+        expect(stderr.join('\n')).not.toContain(rawArguments);
+        expect(stdout.join('\n')).not.toContain(rawArguments);
+      }
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});

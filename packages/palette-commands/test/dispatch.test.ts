@@ -49,15 +49,12 @@ const LIVE_ENTRY: InstanceRegistryEntry = {
 describe('dispatchSlashCommand', () => {
   it('clears the composer draft, then sends exactly "/restart" + Enter to the invoking session\'s registry-resolved live pane', async () => {
     const sent: Sent[] = [];
-    const lookedUp: Array<{ session: string; paneId: string }> = [];
     const outcome = await dispatchSlashCommand(
       'restart',
       { session: 'palette-smoke-2', paneId: 'w1:p1' },
       {
-        entryFor: (session, paneId) => {
-          lookedUp.push({ session, paneId });
-          return LIVE_ENTRY;
-        },
+        entryFor: (session, paneId) =>
+          session === 'palette-smoke-2' && paneId === 'w1:p1' ? LIVE_ENTRY : null,
         isProcessAlive: (pid, startTicks) =>
           pid === LIVE_ENTRY.pid && startTicks === LIVE_ENTRY.proc_start_ticks,
         ...CLEAN_READ,
@@ -67,7 +64,6 @@ describe('dispatchSlashCommand', () => {
 
     expect(outcome.code).toBe(0);
     expect(outcome.error).toBeUndefined();
-    expect(lookedUp).toEqual([{ session: 'palette-smoke-2', paneId: 'w1:p1' }]);
     // Call order is draft clearing FIRST, then the command text.
     expect(sent).toEqual([
       { paneId: 'w1:p1', text: '', keys: CLEAR_KEYS },
@@ -304,5 +300,116 @@ describe('prefill mode from the selected instance\'s own entry (round 2, R7)', (
       { paneId: 'w1:p1', text: '', keys: CLEAR_KEYS },
       { paneId: 'w1:p1', text: '/compact', keys: ['Enter'] },
     ]);
+  });
+});
+
+describe('explicit raw arguments and captured target safety', () => {
+  const socketPath = '/run/trailboss/sessions/palette-smoke-2/trailboss.sock';
+  const entry = { ...LIVE_ENTRY, socket_path: socketPath };
+  const target = { session: 'palette-smoke-2', paneId: 'w1:p1', socketPath };
+
+  it.each([null, { bootId: 'boot-b' }])('refuses capability loss or Core replacement after clearing: %j', async (finalCapability) => {
+    const sent: Sent[] = [];
+    let probes = 0;
+    const outcome = await dispatchSlashCommand('tan', { ...target, rawArguments: '42' }, {
+      entryFor: () => entry,
+      isProcessAlive: () => true,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => ++probes === 1 ? { bootId: 'boot-a' } : finalCapability,
+      sendInput: async (paneId, text, keys) => void sent.push({ paneId, text, keys }),
+    });
+    expect(outcome.code).toBe(12);
+    expect(sent).toEqual([{ paneId: target.paneId, text: '', keys: CLEAR_KEYS }]);
+  });
+
+  it('refuses an incapable Core before mutating the composer', async () => {
+    const sent: Sent[] = [];
+    const outcome = await dispatchSlashCommand('tan', { ...target, rawArguments: '' }, {
+      entryFor: () => entry,
+      isProcessAlive: () => true,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => null,
+      sendInput: async (paneId, text, keys) => void sent.push({ paneId, text, keys }),
+    });
+    expect(outcome.code).toBe(12);
+    expect(sent).toEqual([]);
+  });
+
+  it.each(['replacement', 'removed', 'inventory', 'dead', 'socket'])('refuses target %s during clearing rather than submitting or retargeting', async (change) => {
+    const sent: Sent[] = [];
+    let current: InstanceRegistryEntry | null = entry;
+    let alive = true;
+    const outcome = await dispatchSlashCommand('tan', { ...target, rawArguments: '42' }, {
+      entryFor: () => current,
+      isProcessAlive: () => alive,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => ({ bootId: 'boot-a' }),
+      sendInput: async (paneId, text, keys) => {
+        sent.push({ paneId, text, keys });
+        if (change === 'replacement') current = { ...entry, proc_start_ticks: 999 };
+        if (change === 'removed') current = null;
+        if (change === 'inventory') current = { ...entry, commands: [{ name: 'restart' }] };
+        if (change === 'dead') alive = false;
+        if (change === 'socket') current = { ...entry, socket_path: '/other/socket' };
+      },
+    });
+    expect(outcome.code).toBe(5);
+    expect(sent).toEqual([{ paneId: target.paneId, text: '', keys: CLEAR_KEYS }]);
+  });
+
+  it('never retries a command whose send acknowledgement is lost', async () => {
+    const sent: Sent[] = [];
+    const outcome = await dispatchSlashCommand('tan', { ...target, rawArguments: '42' }, {
+      entryFor: () => entry,
+      isProcessAlive: () => true,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => ({ bootId: 'boot-a' }),
+      sendInput: async (paneId, text, keys) => {
+        sent.push({ paneId, text, keys });
+        if (text !== '') throw new Error('acknowledgement lost');
+      },
+    });
+    expect(outcome.code).toBe(6);
+    expect(sent.filter(({ text }) => text !== '')).toEqual([
+      { paneId: target.paneId, text: '/tan 42', keys: ['Enter'] },
+    ]);
+  });
+});
+
+describe('argument socket binding and asynchronous target checks', () => {
+  it.each([undefined, '/run/trailboss/sessions/other/trailboss.sock'])('refuses registry socket %j before probing or clearing', async (socketPath) => {
+    const sent: Sent[] = [];
+    const outcome = await dispatchSlashCommand('tan', {
+      session: 'palette-smoke-2', paneId: 'w1:p1', rawArguments: '42',
+      socketPath: '/run/trailboss/sessions/palette-smoke-2/trailboss.sock',
+    }, {
+      entryFor: () => ({ ...LIVE_ENTRY, socket_path: socketPath }),
+      isProcessAlive: () => true,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => { throw new Error('mismatched socket must not probe'); },
+      sendInput: async (paneId, text, keys) => void sent.push({ paneId, text, keys }),
+    });
+    expect(outcome.code).toBe(12);
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses replacement during the initial capability probe before composer mutation', async () => {
+    const socketPath = '/run/trailboss/sessions/palette-smoke-2/trailboss.sock';
+    let entry = { ...LIVE_ENTRY, socket_path: socketPath };
+    const sent: Sent[] = [];
+    const outcome = await dispatchSlashCommand('tan', {
+      session: 'palette-smoke-2', paneId: 'w1:p1', socketPath, rawArguments: '42',
+    }, {
+      entryFor: () => entry,
+      isProcessAlive: () => true,
+      ...CLEAN_READ,
+      readArgumentCapability: async () => {
+        entry = { ...entry, pid: entry.pid + 1 };
+        return { bootId: 'boot-a' };
+      },
+      sendInput: async (paneId, text, keys) => void sent.push({ paneId, text, keys }),
+    });
+    expect(outcome.code).toBe(5);
+    expect(sent).toEqual([]);
   });
 });

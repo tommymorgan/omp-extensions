@@ -23,6 +23,8 @@ export interface ManifestAction {
   id: string;
   title: string;
   description?: string;
+  argument_input?: { kind: 'raw_tail' };
+  argument_hint?: string;
 }
 
 export interface ManifestOptions {
@@ -45,6 +47,12 @@ export function renderPluginManifest({ actions, bridgeArgv }: ManifestOptions): 
     lines.push('', '[[actions]]', `id = ${tomlString(action.id)}`, `title = ${tomlString(action.title)}`);
     if (action.description !== undefined && action.description.length > 0) {
       lines.push(`description = ${tomlString(action.description)}`);
+    }
+    if (action.argument_input !== undefined) {
+      lines.push('argument_input = { kind = "raw_tail" }');
+      if (action.argument_hint !== undefined) {
+        lines.push(`argument_hint = ${tomlString(action.argument_hint)}`);
+      }
     }
     lines.push(`command = [${bridgeArgv.map(tomlString).join(', ')}]`);
   }
