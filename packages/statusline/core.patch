@@ -53,7 +53,7 @@ index 55db5d3..616e705 100644
 +
 +- Keep native status-line quota and extension metrics aligned with the session's latest usage reports after `/usage` refreshes and saved resets, without fetching on render or mixing provider/account/model scopes.
 +
- ## [18.13.2] - 2026-10-27
+ ## [18.13.3] - 2026-10-28
  
  ### Added
 diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Track official18.13.3: refresh the release changelog context without changing the statusline additions; document its Bun >=1.4.4 build requirement.
 - Track official18.13.2: refresh core patch contexts for the updated session-mode API and imports without changing the statusline additions.
 - Keep model names and paths readable on phone-width terminals instead of squeezing them into a narrow strip beside the Agent Mail ID.
 - Apply the approved native themed/icon-led rails: keep native rate at the right edge, retain full wrapped left facts, and share native brand/spinner/elapsed with the lower cwd/jj rail without replacing the combined editor.

@@ -4,7 +4,7 @@ This private package provides a separate `omp-statusline` command, an explicitly
 
 ## Supported build
 
-Linux x64 with existing `git`, Bun >=1.4 and `tar` is supported. The staging caller supplies an owned `stagingRoot`; each invocation creates a fresh candidate directory. No system packages or toolchains are installed. Local dependencies are resolved with the selected source's `bun install --frozen-lockfile`.
+Linux x64 with existing `git`, Bun >=1.4.4 and `tar` is supported for official18.13.3. The staging caller supplies an owned `stagingRoot`; each invocation creates a fresh candidate directory. No system packages or toolchains are installed. Local dependencies are resolved with the selected source's `bun install --frozen-lockfile`.
 
 `src/baseline.ts` exports:
 
@@ -63,7 +63,7 @@ Update runs synchronously under an exclusive owned update lock. It maps stock's 
 
 The CLI reports each update phase on stderr immediately and prints an elapsed-time heartbeat every ten seconds while work continues. Full source builds and compiled terminal checks can take several minutes. Ordinary launch arguments, including `--resume`, pass through to OMP. Cancelling before the first successful update leaves no ready companion; use stock `omp` until initialization completes.
 
-The distributed `core.patch` extends `can1357/oh-my-pi` official18.13.2 sourcee996e1c7ac476f60e02b8ed9764cf30fa8c00a8e with the native metrics API and shared quota freshness. Usage refreshes and successful saved resets publish the same selected snapshot to extension metrics without adding render-time fetches. Its SHA-256 is recorded in each patched bundle; runtime equivalence is still required when applying it to any later exact source.
+The distributed `core.patch` extends `can1357/oh-my-pi` official18.13.3 source413d278a87a69b453efabf8d1fedb9940385e8c6 with the native metrics API and shared quota freshness. Usage refreshes and successful saved resets publish the same selected snapshot to extension metrics without adding render-time fetches. Its SHA-256 is recorded in each patched bundle; runtime equivalence is still required when applying it to any later exact source.
 
 Each candidate owns its binary, extension, overlay, zod, editor test assets and reusable verification fixtures. The prior bundle is never edited. A read-only bundle manifest records every file checksum, official source commit and patch identity (or verified official equivalence). Only a fully verified combination becomes ready through a same-filesystem atomic `ready.json` rename. Normal launch validates that complete manifest before executing it. Failed candidates remain unreachable; their owned work/proof directories are retained for diagnosis.
 
