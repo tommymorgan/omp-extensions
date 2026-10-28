@@ -87,8 +87,12 @@ function focusedPaneId(rawContext: string): string | null {
   } catch {
     return null;
   }
-  if (context === null || typeof context !== 'object' || !('focused_pane_id' in context)) return null;
-  const paneId = (context as Record<string, unknown>).focused_pane_id;
+  if (context === null || typeof context !== 'object') return null;
+  // CLI invocations use focused_pane_id; palette UI invocations use pane_id.
+  // Conflicting targets are ambiguous: never choose a pane in that case.
+  const { focused_pane_id: focused, pane_id: selected } = context as Record<string, unknown>;
+  if (focused !== undefined && selected !== undefined && focused !== selected) return null;
+  const paneId = selected !== undefined ? selected : focused;
   if (typeof paneId !== 'string' || paneId.length === 0) return null;
   return paneId;
 }
@@ -156,7 +160,7 @@ export async function bridgeDispatch(
   }
   const session = identity.session;
   if (rawContext !== undefined && paneId === null && rawContext.trim() !== '') {
-    io.err('palette-commands: invocation context JSON names no usable focused_pane_id (malformed or absent); refusing to dispatch');
+    io.err('palette-commands: invocation context JSON names no unambiguous usable focused_pane_id/pane_id; refusing to dispatch');
     return 3;
   }
   // ONE immutable dispatch-map generation (finding 8): id → original

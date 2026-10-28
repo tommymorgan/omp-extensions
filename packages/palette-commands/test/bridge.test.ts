@@ -142,7 +142,16 @@ describe('bridgeDispatch — real invocation contexts (Task 3.1)', () => {
     invocation_source: 'command_palette',
   });
 
-  it('clears the draft, dispatches through dispatch.json to the original command name, and logs the resolved target', async () => {
+  it.each([
+    liveContext,
+    JSON.stringify({
+      workspace_id: 'w2',
+      tab_id: 'w2:t1',
+      pane_id: 'w2:p1',
+      invocation_source: 'plugin_ui',
+      correlation_id: 'palette-context-regression',
+    }),
+  ])('dispatches the captured pane from either invocation route: %s', async (contextJson) => {
     const workDir = mkdtempSync(join(tmpdir(), 'palette-bridge-'));
     const pluginDir = join(workDir, 'plugin');
     mkdirSync(pluginDir, { recursive: true });
@@ -157,7 +166,7 @@ describe('bridgeDispatch — real invocation contexts (Task 3.1)', () => {
     const errors: string[] = [];
     const infos: string[] = [];
 
-    const code = await bridgeDispatch(fixtureEnv(pluginDir, liveContext), {
+    const code = await bridgeDispatch(fixtureEnv(pluginDir, contextJson), {
       err: (message) => void errors.push(message),
       info: (message) => void infos.push(message),
     }, {
@@ -181,7 +190,12 @@ describe('bridgeDispatch — real invocation contexts (Task 3.1)', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('malformed context JSON fails closed: nonzero, nothing sent, no throw', async () => {
+  it.each([
+    '{not-json',
+    JSON.stringify({ pane_id: 'w2:p1', focused_pane_id: 'w3:p1' }),
+    JSON.stringify({ pane_id: '', focused_pane_id: 'w2:p1' }),
+    JSON.stringify({ pane_id: 7 }),
+  ])('rejects malformed or ambiguous invocation targets without sending input: %s', async (contextJson) => {
     const workDir = mkdtempSync(join(tmpdir(), 'palette-bridge-'));
     const pluginDir = join(workDir, 'plugin');
     mkdirSync(pluginDir, { recursive: true });
@@ -189,7 +203,7 @@ describe('bridgeDispatch — real invocation contexts (Task 3.1)', () => {
     const sent: Sent[] = [];
     const errors: string[] = [];
 
-    const code = await bridgeDispatch(fixtureEnv(pluginDir, '{not-json'), {
+    const code = await bridgeDispatch(fixtureEnv(pluginDir, contextJson), {
       err: (message) => void errors.push(message),
     }, {
       stateDir: join(workDir, 'state'),
